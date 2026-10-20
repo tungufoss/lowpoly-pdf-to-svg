@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import collections
 import csv
+import hashlib
 import json
 import math
 import re
@@ -882,6 +883,7 @@ class Reconstruction:
                  reference: dict | None = None, anneal: int = 5, cold: bool = False):
         self.svg = svg
         self.state_path = svg.with_name("fold3d-state.npz")
+        self.component_state_path = svg.with_name("fold3d-components.json")
         self.cold = cold
         self.reference = reference or {}   # finished model's counts (YAML `reference:`)
         self.gape = gape_mm
@@ -923,18 +925,9 @@ class Reconstruction:
         self.proposed: set[int] = set()
         solver = FoldSolver(self.asm, glues)
         grower = Grower(solver, gape_mm=self.gape, verbose=self.verbose)
-        x = self._warm_start(grower)
-        self.warm_started = x is not None
-        if x is None:
-            x = grower.grow()
-            # The first complete placement is useful even if the much longer global
-            # refinement is interrupted. Keep it so a retry can skip both grow passes.
-            self._save_state(x)
-            self.log("saved a pose checkpoint after piece placement")
-        else:
-            self.log("reused the previous 3D pose; settling updated geometry and glues")
-        self.grown_dropped = solver.dropped.copy()
-        x = solver.solve(x, rounds=3, max_nfev=150, reweight=True)
+        components, x = self._prebuild_components(solver, glues, grower)
+        self.components = components
+        x = self._anneal(solver, x, components)
         self._drop_gaping(solver, x)
         self.log(f"glued by number: {int((~solver.dropped).sum())} of {len(glues)} close")
         tried: set[tuple] = set()
@@ -945,11 +938,11 @@ class Reconstruction:
                 break
             tried.update((g.piece, g.a, g.b, g.other, g.c, g.d) for g in new)
             first = len(solver.glues)
-            dropped = solver.dropped
+            previous = {self._glue_key(g): solver.dropped[i] for i, g in enumerate(solver.glues)}
             solver = FoldSolver(self.asm, solver.glues + new)
-            solver.dropped[:first] = dropped
+            solver.dropped[:] = [previous.get(self._glue_key(g), False) for g in solver.glues]
             self.proposed.update(range(first, first + len(new)))
-            x = solver.solve(x, rounds=3, max_nfev=150, reweight=True)
+            x = self._join_components(solver, x, components, max_nfev=100)
             self._drop_gaping(solver, x)
             kept = sum(not solver.dropped[k] for k in range(first, first + len(new)))
             self.log(f"proposed {len(new)} glues by length and position, {kept} close")
@@ -961,28 +954,255 @@ class Reconstruction:
         self.proposed = {i for i, k in enumerate(keep + rest) if k in self.proposed}
         # The other proposals stay listed, unglued, with their gap in the rebuilt model.
         glues = [solver.glues[k] for k in keep + rest]
+        previous = {self._glue_key(g): solver.dropped[k] for k, g in enumerate(solver.glues)}
         solver = FoldSolver(self.asm, glues)
+        solver.dropped[:] = [previous.get(self._glue_key(g), False) for g in solver.glues]
+        self.grown_dropped = solver.dropped.copy()
         solver.dropped[len(keep):] = True
-        if self.warm_started:
-            self.grown_dropped = solver.dropped.copy()
-            self.grown_dropped[len(keep):] = False
-            # The warm pose already places every vertex. Continue from it instead of
-            # running the piece-by-piece grower twice.
-        else:
-            x = Grower(solver, gape_mm=self.gape, verbose=self.verbose).grow()
-            self.grown_dropped = solver.dropped.copy()
-            self.grown_dropped[len(keep):] = False
-        x = solver.solve(x, rounds=3, max_nfev=200, reweight=True)
-        # A glue let go while building often gaped only because a piece placed early sat in a
-        # poor pose. With every piece in place, try them all again: the Cauchy weights still
-        # ease off any that truly cannot close.
         solver.dropped[:len(keep)] = False
         solver.robust[:] = 1.0
-        x = solver.solve(x, rounds=4, max_nfev=300, reweight=True)
-        x = self._anneal(solver, x)
+        x = self._join_components(solver, x, components, max_nfev=160)
+        x = self._anneal(solver, x, components)
         self._drop_gaping(solver, x)
         self.log(f"rebuilt with {len(keep)} glues, {int((~solver.dropped).sum())} close")
         self.solver, self.x = solver, x
+        self._save_state(x)
+
+    @staticmethod
+    def _glue_key(glue: Glue) -> tuple:
+        return glue.number, glue.piece, glue.a, glue.b, glue.other, glue.c, glue.d
+
+    def _same_material_components(self, glues: list[Glue]) -> list[dict]:
+        """Partition the piece graph by same-cardstock numbered glue connections."""
+        piece_ids = sorted({piece for piece, _ in self.asm.index})
+        parent = {piece: piece for piece in piece_ids}
+
+        def find(piece):
+            while parent[piece] != piece:
+                parent[piece] = parent[parent[piece]]
+                piece = parent[piece]
+            return piece
+
+        def union(a, b):
+            a, b = find(a), find(b)
+            if a != b:
+                parent[max(a, b)] = min(a, b)
+
+        for glue in glues:
+            if glue.piece not in parent or glue.other not in parent:
+                continue
+            if self.asm.pieces[glue.piece].material == self.asm.pieces[glue.other].material:
+                union(glue.piece, glue.other)
+
+        members = collections.defaultdict(list)
+        for piece in piece_ids:
+            members[find(piece)].append(piece)
+        components = []
+        for pieces in sorted(members.values(), key=lambda row: (self.asm.pieces[row[0]].material, row)):
+            vertices = sorted(v for v, (piece, _) in self.asm.key.items() if piece in pieces)
+            components.append({"id": ",".join(pieces), "material": self.asm.pieces[pieces[0]].material,
+                               "pieces": pieces, "vertices": vertices})
+        return components
+
+    def _component_signature(self, component: dict, glues: list[Glue]) -> str:
+        selected = set(component["pieces"])
+        pieces = []
+        for piece_id in component["pieces"]:
+            piece = self.asm.pieces[piece_id]
+            pieces.append({
+                "id": piece_id, "material": piece.material,
+                "outline": piece.outline,
+                "folds": piece.folds,
+                "points": [point.tolist() for point in piece.points],
+                "faces": [[face.vertices, face.tab] for face in piece.faces],
+                "fold_kind": sorted((sorted(edge), kind) for edge, kind in piece.fold_kind.items()),
+                "labels": [[label.text, label.edge, label.tab] for label in piece.labels],
+            })
+        internal = [self._glue_key(glue) for glue in glues
+                    if glue.piece in selected and glue.other in selected]
+        payload = {"solver": "same-cardstock-component-v1", "gape": self.gape,
+                   "anneal": self.anneal, "fold_weight": 5.0, "smooth_weight": 1.0,
+                   "pieces": pieces, "glues": sorted(internal)}
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _read_component_cache(self) -> dict:
+        if self.cold:
+            return {}
+        try:
+            data = json.loads(self.component_state_path.read_text(encoding="utf-8"))
+            return data.get("components", {}) if data.get("version") == 1 else {}
+        except (OSError, ValueError, AttributeError):
+            return {}
+
+    def _write_component_cache(self, cache: dict) -> None:
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n",
+                                             dir=self.component_state_path.parent,
+                                             prefix="fold3d-components-tmp-", suffix=".json",
+                                             delete=False) as handle:
+                temporary = Path(handle.name)
+                json.dump({"version": 1, "components": cache}, handle, separators=(",", ":"))
+            temporary.replace(self.component_state_path)
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+
+    def _prebuild_components(self, solver: FoldSolver, glues: list[Glue], grower: Grower):
+        components = self._same_material_components(glues)
+        component_by_piece = {piece: i for i, component in enumerate(components)
+                              for piece in component["pieces"]}
+        cache = self._read_component_cache()
+        signatures = {i: self._component_signature(component, glues)
+                      for i, component in enumerate(components)}
+        valid = {}
+        for i, component in enumerate(components):
+            record = cache.get(signatures[i])
+            if not isinstance(record, dict) or not isinstance(record.get("vertices"), dict):
+                continue
+            keys = [self._vertex_key(vertex) for vertex in component["vertices"]]
+            if all(key in record["vertices"] for key in keys):
+                valid[i] = np.asarray([record["vertices"][key] for key in keys], dtype=float)
+
+        warm = self._warm_start(grower)
+        seed = warm
+        seed_dropped = solver.dropped.copy()
+        missing = [i for i in range(len(components)) if i not in valid]
+        if seed is None and missing:
+            # The cold path still uses the proven whole-model placer once to establish
+            # useful component poses. Subsequent runs can skip it from the cache.
+            seed = grower.grow()
+            seed_dropped = solver.dropped.copy()
+            self._save_state(seed)
+            self.log("saved initial pose checkpoint; prebuilding cardstock components")
+        elif seed is not None:
+            self.log("reused the saved pose to align prebuilt cardstock components")
+
+        x = np.zeros((solver.n, 3))
+        for i, component in enumerate(components):
+            vertices = component["vertices"]
+            if i in valid:
+                points = valid[i]
+                if warm is not None and len(vertices) >= 3:
+                    rotation, shift = _kabsch(points, warm[vertices])
+                    points = points @ rotation.T + shift
+                x[vertices] = points
+                self.log(f"reused {component['material']} component {i + 1}/{len(components)} "
+                         f"({len(component['pieces'])} pieces)")
+                continue
+
+            piece_set = set(component["pieces"])
+            local_pieces = [piece for piece in self.pieces if piece.id in piece_set]
+            local_asm = Assembly(local_pieces)
+            local_global = [self.asm.vid(*local_asm.key[j]) for j in range(len(local_asm.key))]
+            local_glue_global = [j for j, glue in enumerate(glues)
+                                 if glue.piece in piece_set and glue.other in piece_set]
+            local_glues = [glues[j] for j in local_glue_global]
+            local_solver = FoldSolver(local_asm, local_glues)
+            local_solver.dropped[:] = seed_dropped[local_glue_global]
+            local_x = seed[local_global].copy()
+            fixed = set(local_asm.faces[0][1][:3]) if local_asm.faces else set()
+            free = [v for v in range(local_solver.n) if v not in fixed]
+            if free:
+                local_x = local_solver.solve(local_x, free=free, rounds=3, max_nfev=100, reweight=True)
+                local_x = self._anneal_component(local_solver, local_x, free)
+            local_solver.dropped |= local_solver.gaps(local_x) > self.gape
+            for local_i, global_i in enumerate(local_global):
+                x[global_i] = local_x[local_i]
+            for local_i, global_i in enumerate(local_glue_global):
+                solver.dropped[global_i] = local_solver.dropped[local_i]
+            cache[signatures[i]] = {
+                "id": component["id"], "material": component["material"],
+                "vertices": {self._vertex_key(global_i): x[global_i].tolist()
+                             for global_i in vertices},
+            }
+            self._write_component_cache(cache)
+            self.log(f"prebuilt {component['material']} component {i + 1}/{len(components)} "
+                     f"({len(component['pieces'])} pieces)")
+
+        # Cross-component matches are solved as a smaller rigid-body problem below.
+        # Retain their initial grow status for the glue report, but retry them in the join.
+        self.grown_dropped = solver.dropped.copy()
+        for k, glue in enumerate(glues):
+            if component_by_piece.get(glue.piece) != component_by_piece.get(glue.other):
+                self.grown_dropped[k] = bool(self.grown_dropped[k] or seed_dropped[k])
+                solver.dropped[k] = False
+        if not components:
+            return components, seed if seed is not None else x
+        return components, x
+
+    def _anneal_component(self, solver: FoldSolver, x: np.ndarray, free: list[int]) -> np.ndarray:
+        if not solver.wrong_folds(x).any():
+            return x
+        weight = solver.fold_weight
+        for _ in range(self.anneal):
+            for fold_weight, rounds in ((30 * weight, 1), (12 * weight, 1), (4 * weight, 2), (weight, 3)):
+                solver.fold_weight = fold_weight
+                solver.robust[:] = 1.0
+                x = solver.solve(x, free=free, rounds=rounds, max_nfev=100, reweight=True)
+        solver.fold_weight = weight
+        return x
+
+    def _join_components(self, solver: FoldSolver, x: np.ndarray, components: list[dict],
+                         max_nfev: int) -> np.ndarray:
+        """Close cross-component glues by moving cached subassemblies as rigid units."""
+        from scipy.optimize import least_squares
+        from scipy.spatial.transform import Rotation
+
+        component_of_piece = {piece: i for i, component in enumerate(components)
+                              for piece in component["pieces"]}
+        vertex_component = np.full(solver.n, -1, dtype=int)
+        for i, component in enumerate(components):
+            vertex_component[component["vertices"]] = i
+        cross_glue = [k for k, glue in enumerate(solver.glues)
+                      if component_of_piece.get(glue.piece) != component_of_piece.get(glue.other)]
+        cross_glue = [k for k in cross_glue if not solver.dropped[k]]
+        if not cross_glue:
+            return x
+        rows = solver.glue[np.isin(solver.glue[:, 0], cross_glue)]
+        rows = rows[vertex_component[rows[:, 1]] != vertex_component[rows[:, 2]]]
+        if not len(rows):
+            return x
+        active_components = sorted(set(vertex_component[rows[:, 1]]) | set(vertex_component[rows[:, 2]]))
+        links = collections.Counter()
+        for k in cross_glue:
+            glue = solver.glues[k]
+            a, b = component_of_piece.get(glue.piece), component_of_piece.get(glue.other)
+            if a is not None and b is not None:
+                links[a] += 1; links[b] += 1
+        anchor = max(active_components, key=lambda i: (links[i], len(components[i]["vertices"])))
+        moving = [i for i in active_components if i != anchor]
+        offsets = {component: 6 * j for j, component in enumerate(moving)}
+        centres = {i: x[components[i]["vertices"]].mean(axis=0) for i in active_components}
+        hinges = np.flatnonzero(np.isin(solver.hinge_glue, cross_glue))
+        hglue = solver.hinge_glue[hinges]
+        glue_ids, pa, pb = rows.T
+
+        def place(parameters):
+            posed = x.copy()
+            for component in moving:
+                start = offsets[component]
+                rotation = Rotation.from_rotvec(parameters[start:start + 3])
+                translation = parameters[start + 3:start + 6]
+                vertices = components[component]["vertices"]
+                posed[vertices] = rotation.apply(x[vertices] - centres[component]) + centres[component] + translation
+            return posed
+
+        def residual(parameters):
+            posed = place(parameters)
+            weights = np.sqrt(solver.glue_weight[glue_ids])
+            parts = [(weights[:, None] * (posed[pa] - posed[pb])).ravel()]
+            if len(hinges):
+                on = np.where(hglue < 0, 1.0, solver.glue_weight[hglue])
+                parts.append(solver.fold_weight * on * solver._signs(posed, hinges))
+                nl, nr = solver._normals(posed, hinges)
+                parts.append(solver.smooth_weight * on * np.linalg.norm(nl - nr, axis=1))
+            return np.concatenate(parts)
+
+        result = least_squares(residual, np.zeros(6 * len(moving)), method="trf",
+                               x_scale="jac", max_nfev=max_nfev)
+        return place(result.x)
 
     def _vertex_key(self, global_id: int) -> str:
         piece_id, local_id = self.asm.key[global_id]
@@ -1075,31 +1295,14 @@ class Reconstruction:
             if temporary is not None and temporary.exists():
                 temporary.unlink()
 
-    def _anneal(self, solver: FoldSolver, x: np.ndarray) -> np.ndarray:
-        """Folds that settled the wrong way sit in a pose the glues hold them in. Pulling hard on
-        the fold directions tears some glues open but flips those folds; easing back lets the glues
-        close again around the flipped folds. Each cycle leaves fewer folds the wrong way while
-        as many glues close. First settle vertices grouped by cardstock, then run a shorter global
-        pass so cross-cardstock glues can pull those groups together."""
+    def _anneal(self, solver: FoldSolver, x: np.ndarray, components: list[dict]) -> np.ndarray:
+        """Anneal cross-component fold directions while preserving prebuilt component shapes."""
         weight = solver.fold_weight
-        material_vertices: dict[str, list[int]] = collections.defaultdict(list)
-        for vertex, (piece_id, _) in self.asm.key.items():
-            material_vertices[self.asm.pieces[piece_id].material].append(vertex)
-        groups = sorted((sorted(vertices) for vertices in material_vertices.values()),
-                        key=len, reverse=True)
         for cycle in range(self.anneal):
             for fold_weight, rounds in ((30 * weight, 1), (12 * weight, 1), (4 * weight, 2), (weight, 3)):
                 solver.fold_weight = fold_weight
-                # Within a material group the face rigidity, printed folds, and same-colour
-                # glues are independent of the other groups. Solve those smaller systems first.
-                for vertices in groups:
-                    active = set(vertices)
-                    x = solver.solve(x, free=vertices, active=active, rounds=rounds,
-                                     max_nfev=100, reweight=False)
-                # Rejoin cardstock groups through the full glue graph, while keeping this global
-                # closure solve bounded instead of repeating the expensive full anneal schedule.
-                solver.robust[:] = 1.0
-                x = solver.solve(x, rounds=1, max_nfev=60, reweight=True)
+                x = self._join_components(solver, x, components, max_nfev=60 * rounds)
+                solver.robust = 1.0 / (1.0 + (solver.gaps(x) / solver.gap_scale) ** 2)
             self.log(f"fold pull cycle {cycle + 1}: {int(solver.wrong_folds(x).sum())} folds the wrong way, "
                      f"{int((solver.gaps(x) <= self.gape).sum())} glues within {self.gape:g} mm")
         solver.fold_weight = weight
