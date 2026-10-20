@@ -153,7 +153,8 @@ FOLD_MM = 1.5          # a dropped fold is the traced fold whose two ends lie th
 class PieceFix:
     """One answer from the piece review: `ok` (the piece was looked at), `add` (a fold the
     trace missed, with its kind), `drop` (a traced fold that is no fold) or `move` (an outline
-    corner dragged from a to b, taking the folds that end there along), points in page mm.
+    corner dragged from a to b, taking the folds that end there along), `drop-point` (remove an
+    outline vertex and project folds ending there onto the joined edge), points in page mm.
     A `number` row adds a number the reader missed at a (its text in `kind`).
     A `note` row carries free text for edits the page cannot make; the build leaves it alone."""
     piece: str
@@ -177,7 +178,7 @@ class PieceFixes:
         with path.open(encoding="utf-8", newline="") as handle:
             return cls([PieceFix(r["piece"], r["action"], r.get("kind", ""),
                                  (number(r["ax_mm"]), number(r["ay_mm"])), (number(r["bx_mm"]), number(r["by_mm"])))
-                        for r in csv.DictReader(handle) if r.get("action") in ("ok", "add", "drop", "move", "number")])
+                        for r in csv.DictReader(handle) if r.get("action") in ("ok", "add", "drop", "move", "drop-point", "number")])
 
     def apply(self, layouts: list[tuple[PageLayout, float]], kind_of=None) -> tuple[set[str], list[PieceFix]]:
         """Move corners, add and drop folds; returns (ids of pieces changed, rows that matched nothing).
@@ -210,6 +211,30 @@ class PieceFixes:
                 for fold in through:
                     piece.folds.remove(fold)
                     piece.folds += [Fold(fold.a, b, fold.kind), Fold(b, fold.b, fold.kind)]
+            elif row.action == "drop-point":
+                corners = [i for i, p in enumerate(piece.outline) if near(p, a)]
+                if not corners or len(piece.outline) <= 3:
+                    missed.append(row)
+                    continue
+                index = corners[0]
+                removed = tuple(piece.outline[index])
+                previous = tuple(piece.outline[index - 1])
+                following = tuple(piece.outline[(index + 1) % len(piece.outline)])
+
+                def project(p):
+                    dx, dy = following[0] - previous[0], following[1] - previous[1]
+                    length2 = dx * dx + dy * dy
+                    if not length2:
+                        return previous
+                    t = max(0.0, min(1.0, ((p[0] - previous[0]) * dx + (p[1] - previous[1]) * dy) / length2))
+                    return (previous[0] + t * dx, previous[1] + t * dy)
+
+                for fold in piece.folds:
+                    if near(fold.a, removed):
+                        fold.a = project(fold.a)
+                    if near(fold.b, removed):
+                        fold.b = project(fold.b)
+                piece.outline.pop(index)
             elif row.action == "number":
                 height = 2.0 / mm   # printed digits are about 2 mm tall
                 box = (round(a[0] - height), round(a[1] - height / 2), round(2 * height), round(height))

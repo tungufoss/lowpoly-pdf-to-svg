@@ -29,19 +29,48 @@
   header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; padding: 10px 16px;
     border-bottom: 1px solid var(--line); }
   header h1 { font-size: 16px; margin: 0; }
+  header button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--panel); color: var(--ink); cursor: pointer; }
+  header button:hover, #face-menu button:hover { background: color-mix(in srgb, var(--pick) 12%, var(--panel)); }
   header .stats { color: var(--muted); }
   header label { color: var(--muted); user-select: none; }
+  .tint-control { display: inline-flex; align-items: center; gap: 7px; }
+  .tint-control input { width: 105px; padding: 0; }
+  #tab-rebuild-progress { width: 150px; height: 12px; accent-color: var(--pick); vertical-align: middle; }
   main { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
   @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
   .pane { position: relative; min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--line); }
   #three canvas { display: block; width: 100%; height: 100%; }
-  #pattern { background: #fff; cursor: grab; touch-action: none; }
+  #orbit-pad { position: absolute; left: 10px; top: 10px; z-index: 2; display: grid;
+    grid-template: 34px 34px / 34px 34px 34px; gap: 2px; }
+  #orbit-pad { top: auto; bottom: 8px; }
+  #orbit-pad button { border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--panel) 88%, transparent);
+    color: var(--ink); font: 18px/1 system-ui, sans-serif; cursor: pointer; }
+  #orbit-pad button:hover { background: var(--panel); }
+  #face-menu { position: fixed; z-index: 10; min-width: 180px; padding: 5px; border: 1px solid var(--line);
+    border-radius: 7px; background: var(--panel); box-shadow: 0 4px 16px #0004; }
+  #face-menu[hidden] { display: none; }
+  #face-menu button { display: block; width: 100%; padding: 7px 10px; border: 0; border-radius: 4px;
+    background: transparent; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+  #piece-editor { position: absolute; inset: 0; z-index: 20; display: grid; place-items: stretch;
+    background: var(--panel); }
+  #piece-editor[hidden] { display: none; }
+  #piece-editor-card { width: 100%; height: 100%; display: grid;
+    grid-template-rows: auto auto 1fr; background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 0; overflow: hidden; }
+  #piece-editor-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 14px;
+    border-bottom: 1px solid var(--line); }
+  #piece-editor-head h2 { margin: 0; font-size: 16px; }
+  #piece-editor-help { margin: 0; padding: 6px 14px; font-size: 12px; color: var(--muted); }
+  #piece-editor-frame { width: 100%; height: 100%; border: 0; background: var(--bg); }
+  #pattern { background: #e8efff; cursor: grab; touch-action: none; }
   #pattern.dragging { cursor: grabbing; }
   #pattern svg { width: 100%; height: 100%; display: block; }
   .hint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted);
     background: color-mix(in srgb, var(--panel) 80%, transparent); padding: 2px 6px; border-radius: 4px;
     pointer-events: none; }
-  #pattern .hint { color: #6b6a66; background: #ffffffcc; }
+  #three .hint { left: 122px; right: 8px; font-size: 11px; }
+  #pattern .hint { color: #6b6a66; background: #e8efffcc; }
   footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; min-height: 64px;
     max-height: 30vh; overflow: auto; }
   footer h2 { font-size: 14px; margin: 0 0 4px; }
@@ -61,22 +90,51 @@
 <header>
   <h1 id="title">Folded model</h1>
   <span class="stats" id="stats"></span>
+  <button id="fit-view" type="button">Overview</button>
+  <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
+  <button id="save-tabs" type="button" disabled title="Mark a face as a tab to enable this">Save tab marks &amp; re-glue</button>
+  <progress id="tab-rebuild-progress" aria-label="Re-glue progress" hidden></progress>
+  <label class="tint-control">Cardstock tint <input type="range" id="cardstock-tint" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
+  <span class="stats" id="viewer-status" aria-live="polite">Right-click a face to edit it or mark it as a tab.</span>
   <label><input type="checkbox" id="show-open" checked> <span class="open">open glues</span></label>
   <label><input type="checkbox" id="show-wrong" checked> <span class="wrong">folds bent the wrong way</span></label>
 </header>
 <main>
-  <div class="pane" id="three"><div class="hint">drag to turn · scroll to zoom · click a face</div></div>
-  <div class="pane" id="pattern"><div class="hint">drag to pan · scroll to zoom · click a face</div></div>
+  <div class="pane" id="three">
+    <div id="orbit-pad" aria-label="Rotate model">
+      <span></span><button type="button" data-turn="up" aria-label="Rotate up" title="Rotate up">↑</button><span></span>
+      <button type="button" data-turn="left" aria-label="Rotate left" title="Rotate left">←</button>
+      <button type="button" data-turn="down" aria-label="Rotate down" title="Rotate down">↓</button>
+      <button type="button" data-turn="right" aria-label="Rotate right" title="Rotate right">→</button>
+    </div>
+    <div class="hint">drag to turn · right-drag to pan · scroll to zoom · arrow keys rotate · Shift + arrows pan · click a face</div>
+  </div>
+  <div class="pane" id="pattern"><div class="hint">drag to pan · scroll to zoom · click a face</div>
+    <section id="piece-editor" role="dialog" aria-modal="false" aria-labelledby="piece-editor-title" hidden>
+      <div id="piece-editor-card">
+        <div id="piece-editor-head"><h2 id="piece-editor-title">Edit piece</h2><button id="close-piece-editor" type="button">Close</button></div>
+        <p id="piece-editor-help">Edit the fold lines or corners, then choose Save and close. If this stays blank, start Piece Review with <code>make review MODEL=bowser</code>.</p>
+        <iframe id="piece-editor-frame" title="Piece Review editor"></iframe>
+      </div>
+    </section>
+  </div>
 </main>
 <footer id="info"><span class="note">Click a face in either view.</span></footer>
+<div id="face-menu" role="menu" hidden>
+  <button type="button" data-edit role="menuitem">Edit piece in Piece Review…</button>
+  <button type="button" data-tab="true" role="menuitem">Mark as tab · show white</button>
+  <button type="button" data-tab="false" role="menuitem">Mark as surface</button>
+  <button type="button" data-tab="auto" role="menuitem">Use automatic mark</button>
+</div>
 
 <script type="module">
 import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 
 const params = new URLSearchParams(location.search);
 const jsonUrl = params.get("json") || "../data/example/fold3d.json";
 const svgUrl = params.get("svg") || "../data/example/example.svg";
+const modelName = params.get("model") || jsonUrl.match(/\/data\/([^/]+)\//)?.[1] || "";
 const SVGNS = "http://www.w3.org/2000/svg";
 
 class Model {
@@ -87,35 +145,66 @@ class Model {
       if (!this.facesOf.has(f.piece)) this.facesOf.set(f.piece, []);
       this.facesOf.get(f.piece).push(i);
     });
+    this.autoTabs = this.findTabs();
+    this.tabStorageKey = `fold3d-tab-overrides:${jsonUrl}`;
+    try { this.tabOverrides = new Map(Object.entries(JSON.parse(localStorage.getItem(this.tabStorageKey) || "{}"))); }
+    catch { this.tabOverrides = new Map(); }
+    this.tabDirty = this.tabOverrides.size > 0;
   }
   gluesOf(piece) { return this.glues.filter(g => g.piece === piece || g.tab_piece === piece); }
   isOpen(g) { return !/^(closes|proposed, closes)$/.test(g.status); }
+  isTab(index) {
+    const face = this.faces[index];
+    return this.tabOverrides.has(face.id) ? this.tabOverrides.get(face.id) === true :
+      face.tab === true || this.autoTabs.has(index);
+  }
+  setTab(index, value) {
+    const id = this.faces[index].id;
+    if (value === "auto") this.tabOverrides.delete(id);
+    else this.tabOverrides.set(id, value);
+    this.tabDirty = true;
+    try { localStorage.setItem(this.tabStorageKey, JSON.stringify(Object.fromEntries(this.tabOverrides))); return true; }
+    catch (error) { console.warn("Could not save tab marks in this browser", error); return false; }
+  }
+  findTabs() {
+    // fold3d.json contains only Assembly surface faces; glue tabs were excluded
+    // before export. Inferring a tab from the neighbouring surface face paints
+    // real mirror surfaces white and makes the two sides appear different.
+    return new Set(this.faces.flatMap((face, i) => face.tab === true ? [i] : []));
+  }
 }
 
 class FoldedView {
-  constructor(el, model, onPick) {
-    this.model = model; this.onPick = onPick;
+  constructor(el, model, onPick, onContextMenu) {
+    this.model = model; this.onPick = onPick; this.onContextMenu = onContextMenu;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(devicePixelRatio);
     el.prepend(this.renderer.domElement);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(35, 1, 1, 20000);
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls = new TrackballControls(this.camera, this.renderer.domElement);
+    this.controls.rotateSpeed = 3.0;
+    this.controls.zoomSpeed = 1.0;
+    this.controls.panSpeed = 0.8;
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(1, 2, 3);
     this.camera.add(sun); this.scene.add(this.camera);
     this.buildMesh(); this.buildLines();
-    const box = new THREE.Box3().setFromObject(this.mesh), size = box.getSize(new THREE.Vector3()).length();
-    box.getCenter(this.controls.target);
-    this.camera.position.copy(this.controls.target).add(new THREE.Vector3(0, 0, size * 1.4));
-    this.controls.update();
+    this.fit();
+    document.getElementById("fit-view").addEventListener("click", () => this.fitMirrorCenter());
+    document.querySelectorAll("#orbit-pad [data-turn]").forEach(button =>
+      button.addEventListener("click", () => this.turn(button.dataset.turn)));
+    document.addEventListener("keydown", e => this.onKey(e));
     this.listen(el);
     new ResizeObserver(() => this.resize(el)).observe(el);
-    this.renderer.setAnimationLoop(() => this.renderer.render(this.scene, this.camera));
+    this.renderer.setAnimationLoop(() => { this.controls.update(); this.renderer.render(this.scene, this.camera); });
   }
   buildMesh() {
     const { vertices: V, faces, pieces, colours } = this.model;
     const pos = [], col = []; this.triFace = [];
+    const materials = [...new Set(Object.values(pieces).map(p => p.material))].sort();
+    this.materialNames = materials;
+    this.materialIndex = new Map(materials.map((name, i) => [name, i]));
     faces.forEach((f, i) => {
       for (let k = 1; k + 1 < f.v.length; k++) {
         for (const v of [f.v[0], f.v[k], f.v[k + 1]]) pos.push(...V[v]);
@@ -123,44 +212,96 @@ class FoldedView {
       }
     });
     this.base = faces.map(f => new THREE.Color(colours[pieces[f.piece].material] || "#b3b3b3"));
+    this.selectedPiece = null; this.selectedFace = null;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
+    this.triFace.forEach((faceIndex, triangleIndex) => geo.addGroup(triangleIndex * 3, 3,
+      this.materialIndex.get(pieces[faces[faceIndex].piece].material)));
     geo.computeVertexNormals();
-    this.mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
+    this.meshMaterials = materials.map(() => new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
+    this.mesh = new THREE.Mesh(geo, this.meshMaterials);
     this.scene.add(this.mesh);
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
       new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
-    this.scene.add(edges);
+    this.edges = edges; this.scene.add(edges);
     this.paint(null, null);
   }
   buildLines() {
-    const V = this.model.vertices, seg = (pairs, colour) => {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.Float32BufferAttribute(pairs.flatMap(([a, b]) => [...V[a], ...V[b]]), 3));
-      const line = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: colour }));
-      this.scene.add(line); return line;
-    };
     const css = getComputedStyle(document.documentElement);
+    const edgeKey = (a, b) => a < b ? `${a}:${b}` : `${b}:${a}`;
+    const edgeFaces = new Map();
+    this.model.faces.forEach(face => face.v.forEach((a, i) => {
+      const key = edgeKey(a, face.v[(i + 1) % face.v.length]);
+      if (!edgeFaces.has(key)) edgeFaces.set(key, []);
+      edgeFaces.get(key).push(face);
+    }));
+    const line = colour => {
+      const geometry = new THREE.BufferGeometry();
+      const object = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: colour }));
+      this.scene.add(object); return object;
+    };
     // an open glue: its two ends (a meets d, b meets c) drawn across the gap
-    this.openLines = seg(this.model.glues.filter(g => this.model.isOpen(g) && !g.status.startsWith("proposed by shape"))
-      .flatMap(g => [[g.v[0], g.v[3]], [g.v[1], g.v[2]]]), css.getPropertyValue("--open").trim());
-    this.wrongLines = seg(this.model.wrong_folds, css.getPropertyValue("--wrong").trim());
+    this.openLineRecords = this.model.glues.filter(g => this.model.isOpen(g) && !g.status.startsWith("proposed by shape"))
+      .map(g => ({pairs: [[g.v[0], g.v[3]], [g.v[1], g.v[2]]], materials: new Set([g.piece, g.tab_piece]
+        .map(piece => this.model.pieces[piece]?.material).filter(Boolean))}));
+    this.wrongLineRecords = this.model.wrong_folds.map(pair => ({pairs: [pair], materials: new Set(
+      (edgeFaces.get(edgeKey(...pair)) || []).map(face => this.model.pieces[face.piece]?.material).filter(Boolean))}));
+    this.openLines = line(css.getPropertyValue("--open").trim());
+    this.wrongLines = line(css.getPropertyValue("--wrong").trim());
+    this.showOpen = true; this.showWrong = true;
+    this.updateDiagnosticLines();
+  }
+  updateDiagnosticLines() {
+    const V = this.model.vertices;
+    for (const [object, records, enabled] of [[this.openLines, this.openLineRecords, this.showOpen],
+      [this.wrongLines, this.wrongLineRecords, this.showWrong]]) {
+      const pairs = records.filter(record => !this.currentMaterialFilter || record.materials.has(this.currentMaterialFilter))
+        .flatMap(record => record.pairs);
+      object.geometry.setAttribute("position", new THREE.Float32BufferAttribute(
+        pairs.flatMap(([a, b]) => [...V[a], ...V[b]]), 3));
+      object.geometry.computeBoundingSphere();
+      object.visible = enabled && pairs.length > 0;
+    }
   }
   paint(piece, face) {
+    this.selectedPiece = piece; this.selectedFace = face;
+    const relatedFaces = new Set();
+    if (face !== null && this.relatedPieces?.length) {
+      const source = this.model.faces[face], sourceIndex = Number(source.id.split("/").at(-1));
+      for (const twin of this.relatedPieces) {
+        const match = this.model.faces.findIndex(f => f.piece === twin && Number(f.id.split("/").at(-1)) === sourceIndex);
+        if (match >= 0) relatedFaces.add(match);
+      }
+    }
     const c = this.mesh.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
     this.triFace.forEach((f, t) => {
       let colour = this.base[f].clone();
-      if (f === face) colour = pick.clone();
+      if (f === face || relatedFaces.has(f)) colour = pick.clone();
       else if (piece && this.model.faces[f].piece === piece) colour.lerp(pick, 0.45);
+      else if (this.relatedPieces?.includes(this.model.faces[f].piece)) colour.lerp(pick, 0.45);
       for (let k = 0; k < 3; k++) c.setXYZ(3 * t + k, colour.r, colour.g, colour.b);
     });
     c.needsUpdate = true;
   }
+  setMaterialFilter(material) {
+    this.currentMaterialFilter = material;
+    this.meshMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
+    this.edges.visible = !material;
+    this.updateDiagnosticLines();
+    this.fit();
+  }
   listen(el) {
-    let down = null;
+    let down = null, contextDown = null;
     const canvas = this.renderer.domElement;
-    canvas.addEventListener("pointerdown", e => down = [e.clientX, e.clientY]);
+    canvas.addEventListener("pointerdown", e => {
+      down = [e.clientX, e.clientY];
+      if (e.button === 2) contextDown = {x: e.clientX, y: e.clientY, moved: false};
+    });
+    canvas.addEventListener("pointermove", e => {
+      if (contextDown && Math.hypot(e.clientX - contextDown.x, e.clientY - contextDown.y) > 4)
+        contextDown.moved = true;
+    });
     canvas.addEventListener("pointerup", e => {
       if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
       const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
@@ -168,12 +309,101 @@ class FoldedView {
       const hit = ray.intersectObject(this.mesh)[0];
       if (hit) this.onPick(this.triFace[hit.faceIndex], "3d");
     });
+    canvas.addEventListener("contextmenu", e => {
+      e.preventDefault();
+      const moved = contextDown?.moved;
+      contextDown = null;
+      if (moved) return;
+      const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1,
+        -(e.clientY - r.top) / r.height * 2 + 1), this.camera);
+      const hit = ray.intersectObject(this.mesh)[0];
+      if (hit) this.onContextMenu(this.triFace[hit.faceIndex], e.clientX, e.clientY);
+    });
+  }
+  turn(direction) {
+    const step = Math.PI / 12, target = this.controls.target;
+    const axis = direction === "left" || direction === "right"
+      ? new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion)
+      : new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    const sign = direction === "left" || direction === "up" ? -1 : 1;
+    const rotation = new THREE.Quaternion().setFromAxisAngle(axis, sign * step);
+    const offset = this.camera.position.clone().sub(target).applyQuaternion(rotation);
+    this.camera.position.copy(target).add(offset);
+    this.camera.up.applyQuaternion(rotation);
+    this.camera.lookAt(target);
+    this.controls.update();
+  }
+  pan(horizontal, vertical) {
+    const shift = this.camera.position.distanceTo(this.controls.target) * 0.06;
+    const delta = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion).multiplyScalar(horizontal * shift)
+      .add(new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion).multiplyScalar(vertical * shift));
+    this.camera.position.add(delta); this.controls.target.add(delta); this.controls.update();
+  }
+  onKey(e) {
+    if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName) || e.altKey || e.ctrlKey || e.metaKey) return;
+    const pan = e.shiftKey;
+    const action = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1]}[e.key];
+    if (!action) return;
+    e.preventDefault();
+    if (pan) this.pan(...action);
+    else this.turn(({ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down"})[e.key]);
   }
   focus(face) {
     const p = this.model.faces[face].v.map(v => new THREE.Vector3(...this.model.vertices[v]));
     const centre = p.reduce((a, b) => a.add(b), new THREE.Vector3()).divideScalar(p.length);
     this.camera.position.add(centre.clone().sub(this.controls.target));
     this.controls.target.copy(centre); this.controls.update();
+  }
+  focusPiece(piece) {
+    const faces = this.model.facesOf.get(piece) || [];
+    const points = faces.flatMap(i => this.model.faces[i].v.map(v => new THREE.Vector3(...this.model.vertices[v])));
+    if (!points.length) return;
+    const box = new THREE.Box3().setFromPoints(points), centre = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3()), radius = Math.max(size.x, size.y, size.z, 1);
+    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+    const distance = radius / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) * 1.25;
+    this.controls.target.copy(centre);
+    this.camera.position.copy(centre).addScaledVector(direction, distance);
+    this.camera.lookAt(centre); this.controls.update();
+  }
+  fit() {
+    let box;
+    if (this.currentMaterialFilter) {
+      const selected = this.model.faces.filter(f => this.model.pieces[f.piece].material === this.currentMaterialFilter);
+      const points = selected.flatMap(f => f.v.map(v => new THREE.Vector3(...this.model.vertices[v])));
+      box = new THREE.Box3().setFromPoints(points);
+    } else box = new THREE.Box3().setFromObject(this.mesh);
+    const size = box.getSize(new THREE.Vector3()).length();
+    box.getCenter(this.controls.target);
+    this.camera.up.set(0, 1, 0);
+    this.camera.position.copy(this.controls.target).add(new THREE.Vector3(0, 0, size * 1.4));
+    this.camera.lookAt(this.controls.target);
+    this.controls.update();
+  }
+  fitMirrorCenter() {
+    const centrePieces = ["piece-14-07", "piece-15-06"];
+    const centrePoints = this.model.faces.filter(face => centrePieces.includes(face.piece))
+      .flatMap(face => face.v.map(v => new THREE.Vector3(...this.model.vertices[v])));
+    if (!centrePoints.length) { this.fit(); return; }
+    const centre = new THREE.Box3().setFromPoints(centrePoints).getCenter(new THREE.Vector3());
+    // Keep the whole model in view while centring the camera on the yellow mask pair.
+    // Measure the bounds from the requested target, since it can be offset from the
+    // model's geometric centre, and account for both the viewport height and width.
+    const bounds = new THREE.Box3().setFromObject(this.mesh);
+    const corners = Array.from({length: 8}, (_, i) => new THREE.Vector3(
+      i & 1 ? bounds.max.x : bounds.min.x,
+      i & 2 ? bounds.max.y : bounds.min.y,
+      i & 4 ? bounds.max.z : bounds.min.z));
+    const halfWidth = Math.max(...corners.map(point => Math.abs(point.x - centre.x)));
+    const halfHeight = Math.max(...corners.map(point => Math.abs(point.y - centre.y)));
+    const tangent = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    const distance = Math.max(halfHeight / tangent, halfWidth / (tangent * this.camera.aspect)) * 1.12;
+    this.controls.target.copy(centre);
+    this.camera.up.set(0, 1, 0);
+    this.camera.position.copy(centre).add(new THREE.Vector3(0, 0, distance));
+    this.camera.lookAt(centre);
+    this.controls.update();
   }
   resize(el) {
     const { clientWidth: w, clientHeight: h } = el;
@@ -182,8 +412,9 @@ class FoldedView {
 }
 
 class PatternView {
-  constructor(el, model, svgText, onPick) {
-    this.el = el; this.model = model; this.onPick = onPick;
+  constructor(el, model, svgText, onPick, onContextMenu) {
+    this.el = el; this.model = model; this.onPick = onPick; this.onContextMenu = onContextMenu;
+    this.tintStrength = 55; this.selectedPiece = null; this.selectedFace = null;
     const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
     // the page scans and the review marks are not part of the pattern (drop them before they load)
     doc.querySelectorAll("metadata, image").forEach(n => n.remove());
@@ -204,16 +435,41 @@ class PatternView {
       p.setAttribute("fill", "transparent"); p.setAttribute("stroke", "none");
       p.dataset.face = i; this.overlay.append(p); return p;
     });
+    this.pieceGroups = [...this.svg.querySelectorAll('g[id^="piece-"][data-material]')];
     this.svg.append(this.overlay);
     this.listen();
   }
   paint(piece, face) {
     this.polys.forEach((p, i) => {
       const mine = piece && this.model.faces[i].piece === piece;
-      p.setAttribute("fill", i === face ? "#1f6feb88" : mine ? "#1f6feb33" : "transparent");
+      const f = this.model.faces[i];
+      const material = this.model.pieces[f.piece].material;
+      const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3").lerp(new THREE.Color("#ffffff"), 0.68);
+      const tint = `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
+      const tinted = this.tintStrength > 0;
+      p.setAttribute("fill", tinted ? (this.model.isTab(i) ? "#ffffff" : tint) :
+        i === face ? "#1f6feb88" : mine ? "#1f6feb33" : "transparent");
+      p.setAttribute("fill-opacity", tinted ? String(this.tintStrength / 100) : "1");
       p.setAttribute("stroke", i === face ? "#1f6feb" : "none");
       p.setAttribute("stroke-width", "0.6");
     });
+  }
+  setTint(strength) { this.tintStrength = Math.max(0, Math.min(100, Number(strength) || 0)); this.paint(this.selectedPiece, this.selectedFace); }
+  setMaterialFilter(material) {
+    for (const group of this.pieceGroups) group.style.display = !material || group.dataset.material === material ? "" : "none";
+    this.polys.forEach((polygon, i) => {
+      const piece = this.model.faces[i].piece;
+      polygon.style.display = !material || this.model.pieces[piece].material === material ? "" : "none";
+    });
+    if (material) {
+      const faces = this.model.faces.filter(f => this.model.pieces[f.piece].material === material);
+      const xs = faces.flatMap(f => f.flat.map(p => p[0])), ys = faces.flatMap(f => f.flat.map(p => p[1]));
+      if (xs.length) {
+        const pad = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.06;
+        this.setView([Math.min(...xs) - pad, Math.min(...ys) - pad,
+          Math.max(...xs) - Math.min(...xs) + 2 * pad, Math.max(...ys) - Math.min(...ys) + 2 * pad]);
+      }
+    } else this.setView([...this.full]);
   }
   focus(piece) {
     const xs = [], ys = [];
@@ -229,6 +485,11 @@ class PatternView {
   }
   listen() {
     let drag = null;
+    this.el.addEventListener("contextmenu", e => {
+      e.preventDefault();
+      const hit = document.elementsFromPoint(e.clientX, e.clientY).find(n => n.dataset && n.dataset.face !== undefined);
+      if (hit) this.onContextMenu(Number(hit.dataset.face), e.clientX, e.clientY);
+    });
     this.el.addEventListener("wheel", e => {
       e.preventDefault();
       const [x, y] = this.toSvg(e), k = Math.exp(e.deltaY * 0.0015), [vx, vy, vw, vh] = this.view;
@@ -261,20 +522,165 @@ class Viewer {
   constructor(model, svgText) {
     this.model = model;
     const pick = (face, from) => this.select(face, from);
-    this.folded = new FoldedView(document.getElementById("three"), model, pick);
-    this.pattern = new PatternView(document.getElementById("pattern"), model, svgText, pick);
+    const contextMenu = (face, x, y) => this.showFaceMenu(face, x, y);
+    this.folded = new FoldedView(document.getElementById("three"), model, pick, contextMenu);
+    this.pattern = new PatternView(document.getElementById("pattern"), model, svgText, pick, contextMenu);
+    const materialFilter = document.getElementById("material-filter");
+    const materials = [...new Set(Object.values(model.pieces).map(piece => piece.material))].sort();
+    for (const material of materials) {
+      const option = document.createElement("option"); option.value = material;
+      option.textContent = material[0].toUpperCase() + material.slice(1); materialFilter.append(option);
+    }
+    const materialKey = `fold3d-material-filter:${jsonUrl}`;
+    // Open on the complete model. A saved single-cardstock filter would hide most
+    // of the model and make the centered Overview pose look like a bad zoom.
+    materialFilter.value = "";
+    const applyMaterialFilter = value => {
+      this.folded.setMaterialFilter(value); this.pattern.setMaterialFilter(value);
+      localStorage.setItem(materialKey, value);
+    };
+    applyMaterialFilter(materialFilter.value);
+    // Overview is also the opening camera pose. Do this after restoring the saved
+    // material filter, whose own fit would otherwise pull the camera off center.
+    this.folded.fitMirrorCenter();
+    materialFilter.addEventListener("change", e => applyMaterialFilter(e.target.value));
+    const tintControl = document.getElementById("cardstock-tint");
+    const tabSave = document.getElementById("save-tabs");
+    const tabProgress = document.getElementById("tab-rebuild-progress");
+    tabSave.disabled = !this.model.tabDirty;
+    tabSave.addEventListener("click", async () => {
+      if (tabSave.dataset.reload === "true") { location.reload(); return; }
+      tabSave.disabled = true;
+      tabSave.textContent = "Saving and re-gluing…";
+      tabProgress.hidden = false; tabProgress.removeAttribute("value");
+      try {
+        const response = await fetch(`${this.reviewOrigin}/api/tab-marks`, {method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({model: modelName, overrides: Object.fromEntries(this.model.tabOverrides)})});
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Tab mark rebuild failed");
+        let completed = result;
+        if (result.job_id) {
+          while (true) {
+            await new Promise(resolve => setTimeout(resolve, 900));
+            const statusResponse = await fetch(`${this.reviewOrigin}/api/tab-marks/status?id=${encodeURIComponent(result.job_id)}`);
+            const job = await statusResponse.json();
+            if (!statusResponse.ok) throw new Error(job.error || "Could not read rebuild progress");
+            document.getElementById("viewer-status").textContent = job.progress || "Rebuilding folded model…";
+            if (job.status === "error") throw new Error(`${job.message}\n${(job.output || []).slice(-8).join("\n")}`);
+            if (job.status === "complete") { completed = {...job, rebuilt: true}; break; }
+          }
+        }
+        this.model.tabDirty = false;
+        this.model.tabOverrides.clear();
+        localStorage.removeItem(this.model.tabStorageKey);
+        tabSave.dataset.reload = "true";
+        tabSave.disabled = false;
+        tabSave.textContent = "Reload updated model";
+        tabProgress.value = 1;
+        document.getElementById("viewer-status").textContent = completed.message;
+      } catch (error) {
+        tabProgress.hidden = true; tabProgress.removeAttribute("value");
+        document.getElementById("viewer-status").textContent = `Tab marks saved locally; re-glue failed: ${error.message}`;
+        tabSave.disabled = false;
+        tabSave.textContent = "Retry save & re-glue";
+      }
+    });
+    const tintKey = `fold3d-cardstock-tint:${jsonUrl}`;
+    const initialTint = Number(localStorage.getItem(tintKey) ?? 55);
+    tintControl.value = String(initialTint);
+    document.getElementById("cardstock-tint-value").textContent = `${initialTint}%`;
+    this.pattern.setTint(initialTint);
+    tintControl.addEventListener("input", e => {
+      this.pattern.setTint(e.target.value);
+      document.getElementById("cardstock-tint-value").textContent = `${e.target.value}%`;
+      localStorage.setItem(tintKey, e.target.value);
+    });
+    this.faceMenu = document.getElementById("face-menu");
+    this.menuFace = null;
+    this.faceMenu.addEventListener("click", e => {
+      if (e.target.closest("[data-edit]")) {
+        this.faceMenu.hidden = true;
+        this.openPieceEditor();
+        return;
+      }
+      const button = e.target.closest("[data-tab]");
+      if (!button || this.menuFace === null) return;
+      const value = button.dataset.tab === "auto" ? "auto" : button.dataset.tab === "true";
+      const saved = this.model.setTab(this.menuFace, value);
+      this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
+      tabSave.disabled = !this.model.tabDirty;
+      document.getElementById("viewer-status").textContent = saved ?
+        "Tab marks saved in this browser." : "Could not save tab marks in this browser.";
+      this.faceMenu.hidden = true;
+    });
+    document.addEventListener("pointerdown", e => {
+      if (!this.faceMenu.contains(e.target)) this.faceMenu.hidden = true;
+    });
+    this.editor = document.getElementById("piece-editor");
+    this.editorFrame = document.getElementById("piece-editor-frame");
+    this.reviewOrigin = `${location.protocol}//${location.hostname}:${params.get("reviewPort") || "8765"}`;
+    document.getElementById("close-piece-editor").addEventListener("click", () => this.closePieceEditor());
+    this.editor.addEventListener("click", e => { if (e.target === this.editor) this.closePieceEditor(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && !this.editor.hidden) this.closePieceEditor(); });
+    window.addEventListener("message", e => {
+      if (e.origin !== this.reviewOrigin || e.source !== this.editorFrame.contentWindow ||
+          !["piece-review-saved", "piece-review-pair"].includes(e.data?.type)) return;
+      if (e.data.type === "piece-review-pair") {
+        this.folded.relatedPieces = (e.data.pieces || []).filter(piece => piece !== this.folded.selectedPiece);
+        this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
+        return;
+      }
+      this.closePieceEditor();
+      document.getElementById("viewer-status").textContent =
+        "Piece edits saved. The folded 3D model needs a rebuild to apply them.";
+    });
     const open = model.glues.filter(g => model.isOpen(g) && !g.status.startsWith("proposed by shape")).length;
     document.getElementById("title").textContent = `Folded model · ${model.source}`;
     document.getElementById("stats").textContent =
       `${model.faces.length} faces · ${model.glues.length - open} of ${model.glues.length} glues close · ${model.wrong_folds.length} folds bent the wrong way`;
-    for (const [id, line] of [["show-open", this.folded.openLines], ["show-wrong", this.folded.wrongLines]])
-      document.getElementById(id).addEventListener("change", e => line.visible = e.target.checked);
+    document.getElementById("show-open").addEventListener("change", e => {
+      this.folded.showOpen = e.target.checked; this.folded.updateDiagnosticLines();
+    });
+    document.getElementById("show-wrong").addEventListener("change", e => {
+      this.folded.showWrong = e.target.checked; this.folded.updateDiagnosticLines();
+    });
   }
   select(face, from) {
     const f = this.model.faces[face];
     this.folded.paint(f.piece, face); this.pattern.paint(f.piece, face);
     if (from === "3d") this.pattern.focus(f.piece); else this.folded.focus(face);
     this.describe(f);
+    if (from === "3d" || from === "svg")
+      window.parent.postMessage({type: "fold3d-select-piece", piece: f.piece}, location.origin);
+  }
+  showFaceMenu(face, x, y) {
+    this.menuFace = face;
+    this.select(face, "3d");
+    const menu = this.faceMenu, f = this.model.faces[face], isTab = this.model.isTab(face);
+    menu.querySelector('[data-tab="true"]').hidden = isTab;
+    menu.querySelector('[data-tab="false"]').hidden = !isTab;
+    menu.querySelector('[data-tab="auto"]').hidden = !this.model.tabOverrides.has(f.id);
+    menu.hidden = false;
+    menu.style.left = `${Math.min(x, innerWidth - menu.offsetWidth - 8)}px`;
+    menu.style.top = `${Math.min(y, innerHeight - menu.offsetHeight - 8)}px`;
+  }
+  openPieceEditor() {
+    const face = this.model.faces[this.menuFace];
+    if (!modelName) {
+      document.getElementById("viewer-status").textContent = "Could not identify the source model for Piece Review.";
+      return;
+    }
+    document.getElementById("piece-editor-title").textContent = `Edit ${face.piece}`;
+    this.folded.focusPiece(face.piece);
+    const url = new URL("/review", this.reviewOrigin);
+    url.search = new URLSearchParams({server: "1", model: modelName, piece: face.piece, embed: "1", parentOrigin: location.origin});
+    this.editorFrame.src = url.href;
+    this.editor.hidden = false;
+  }
+  closePieceEditor() {
+    this.editor.hidden = true;
+    this.editorFrame.src = "about:blank";
   }
   describe(f) {
     const piece = this.model.pieces[f.piece];
@@ -282,7 +688,8 @@ class Viewer {
     const info = document.getElementById("info");
     info.innerHTML = "";
     const h = document.createElement("h2");
-    h.textContent = `${f.piece} · face ${f.id.split("/")[1]} · ${piece.material} cardstock`;
+    const faceIndex = this.model.faces.indexOf(f);
+    h.textContent = `${f.piece} · face ${f.id.split("/")[1]} · ${this.model.isTab(faceIndex) ? "tab · white" : `${piece.material} cardstock`}`;
     info.append(h);
     if (piece.inspect) {
       const p = document.createElement("div"); p.className = "note"; p.textContent = `To check: ${piece.inspect}`; info.append(p);
@@ -304,6 +711,14 @@ try {
     fetch(svgUrl).then(r => { if (!r.ok) throw new Error(`${svgUrl}: ${r.status}`); return r.text(); }),
   ]);
   window.viewer = new Viewer(new Model(data), svgText);
+  window.addEventListener("message", event => {
+    if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
+        event.data?.type !== "review-select-piece") return;
+    const face = window.viewer.model.facesOf.get(event.data.piece)?.[0];
+    if (face !== undefined) window.viewer.select(face, "parent");
+  });
+  if (window.parent !== window)
+    window.parent.postMessage({type: "fold3d-ready"}, location.origin);
 } catch (err) {
   document.querySelector("main").innerHTML = `<div id="error">Could not load the model: ${err.message}.
     Run <code>make -f fold3d.mk view</code> and open the address it prints.</div>`;
