@@ -425,12 +425,16 @@ class FoldSolver:
             k, p, q = self.glue[pair].T
             parts.append(np.sqrt(self.glue_weight[k]) * (x[p, axis] - x[q, axis]))
         if len(fold_rows):
-            weights = np.where(self.hinge_glue[fold_rows] < 0, 1.0,
-                               self.glue_weight[self.hinge_glue[fold_rows]])
+            hinge_glue = self.hinge_glue[fold_rows]
+            weights = np.ones(len(fold_rows))
+            glued = hinge_glue >= 0
+            weights[glued] = self.glue_weight[hinge_glue[glued]]
             parts.append(self.fold_weight * weights * self._signs(x, fold_rows))
         if len(smooth_rows):
-            weights = np.where(self.hinge_glue[smooth_rows] < 0, 1.0,
-                               self.glue_weight[self.hinge_glue[smooth_rows]])
+            hinge_glue = self.hinge_glue[smooth_rows]
+            weights = np.ones(len(smooth_rows))
+            glued = hinge_glue >= 0
+            weights[glued] = self.glue_weight[hinge_glue[glued]]
             nl, nr = self._normals(x, smooth_rows)
             parts.append(self.smooth_weight * weights * np.linalg.norm(nl - nr, axis=1))
         return np.concatenate(parts) if parts else np.empty(0)
@@ -506,7 +510,10 @@ class FoldSolver:
         return np.linalg.norm(x[a] - x[b], axis=1) - d
 
     def wrong_folds(self, x: np.ndarray) -> np.ndarray:
-        return (self._signs(x) > 0.05) & np.where(self.hinge_glue < 0, True, ~self.dropped[self.hinge_glue])
+        open_or_unmapped = np.ones(len(self.hinge_glue), dtype=bool)
+        glued = self.hinge_glue >= 0
+        open_or_unmapped[glued] = ~self.dropped[self.hinge_glue[glued]]
+        return (self._signs(x) > 0.05) & open_or_unmapped
 
 
 # -- growing the model piece by piece ---------------------------------------------
