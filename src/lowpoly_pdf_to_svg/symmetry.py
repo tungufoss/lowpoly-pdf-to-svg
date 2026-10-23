@@ -34,6 +34,9 @@ SAMPLES = 96          # outline points compared for exact mirrors
 FIT_MM = 1.5          # twins whose matched lines map onto each other this closely (RMS) can compare folds
 FOLD_MM = 2.0         # a mirrored fold whose ends land this close to a twin's fold is the same fold
 ON_CUT_MM = 1.0       # a mirrored fold this close to the twin's cut is a glue tab moved elsewhere
+MOVE_MIN_MM = 0.2     # mirror corners closer than this are left as traced
+MOVE_MAX_MM = 1.5     # corners further apart are not one corner (a tab placed elsewhere)
+COPY_MAX_MM = 3.0     # ... unless one twin folds cleanly in 3D: then it is the truth up to this far
 
 
 @dataclass
@@ -185,7 +188,8 @@ class Symmetry:
                         if same[0] != kind and source < target:
                             gaps.append({"piece": target, "twin": source, "kind": kind, "issue": "style differs",
                                          "ax_mm": round(float(ma[0]), 2), "ay_mm": round(float(ma[1]), 2),
-                                         "bx_mm": round(float(mb[0]), 2), "by_mm": round(float(mb[1]), 2)})
+                                         "bx_mm": round(float(mb[0]), 2), "by_mm": round(float(mb[1]), 2),
+                                         "twin_fold": (a, b)})
                         continue
                     if _to_outline(corners, (ma + mb) / 2) <= ON_CUT_MM or np.linalg.norm(mb - ma) < 2.0:
                         continue
@@ -198,6 +202,47 @@ class Symmetry:
                                  "ax_mm": round(float(ma[0]), 2), "ay_mm": round(float(ma[1]), 2),
                                  "bx_mm": round(float(mb[0]), 2), "by_mm": round(float(mb[1]), 2)})
         return gaps
+
+    def corner_moves(self, clean: set[str] | None = None) -> list[dict]:
+        """Twins have the same faces, so a face corner and its mirror corner that sit 0.2-1.5 mm
+        apart (after laying the twins on each other) both move to their mirrored mean. When only
+        one twin is `clean` (folds in 3D with every glue closed and no corner off), it is taken as
+        the truth: the other twin's corners move onto its mirror, up to 3 mm. Rows use the
+        piece-edits.csv columns, in page mm. Tab corners find no mirror corner and stay."""
+        clean = clean or set()
+        rows = []
+        for t in self.twins:
+            pairs = [(np.mean(x.edge, axis=0) * self.mm[t.a], np.mean(y.edge, axis=0) * self.mm[t.b]) for x, y in t.lines]
+            if len(pairs) < 3:
+                continue
+            fit = _similar(np.array([p for p, _ in pairs]), np.array([q for _, q in pairs]))
+            if fit is None:
+                continue
+            ca, cb = self.outline[t.a], self.outline[t.b]
+            truth = ({t.a, t.b} & clean) if len({t.a, t.b} & clean) == 1 else set()
+            reach = COPY_MAX_MM if truth else MOVE_MAX_MM
+            matched = _mutual(fit[0](ca), cb, MOVE_MAX_MM)
+            if len(matched) < 3:
+                continue
+            # Refit on the matched corners themselves: tighter than the number positions.
+            fit = _similar(ca[[i for i, _ in matched]], cb[[j for _, j in matched]])
+            if fit is None:
+                continue
+            forward, back = fit
+            for i, j in _mutual(forward(ca), cb, reach):
+                gap = float(np.linalg.norm(forward(ca[i]) - cb[j]))
+                if gap < MOVE_MIN_MM:
+                    continue
+                mean = ca[i] if t.a in truth else back(cb[j]) if t.b in truth else (ca[i] + back(cb[j])) / 2
+                for piece, twin, old, new in ((t.a, t.b, ca[i], mean), (t.b, t.a, cb[j], forward(mean))):
+                    if piece in truth:
+                        continue
+                    rows.append({"piece": piece, "action": "move", "kind": "",
+                                 "ax_mm": round(float(old[0]), 2), "ay_mm": round(float(old[1]), 2),
+                                 "bx_mm": round(float(new[0]), 2), "by_mm": round(float(new[1]), 2),
+                                 "note": f"mirror of {twin}: corners {gap:.2f} mm apart"
+                                         + (f", {twin} folds cleanly in 3D" if truth else "")})
+        return rows
 
     def write(self, path: Path, records: list[dict]) -> int:
         """Every numbered line beside its mirror line; returns how many disagree in length."""
@@ -230,6 +275,12 @@ def _similar(a: np.ndarray, b: np.ndarray):
     if np.sqrt((((a - ca) @ rotation.T * scale + cb - b) ** 2).sum(1).mean()) > FIT_MM:
         return None
     return (lambda p: (p - ca) @ rotation.T * scale + cb), (lambda q: (q - cb) @ rotation / scale + ca)
+
+
+def _mutual(a: np.ndarray, b: np.ndarray, reach: float) -> list[tuple[int, int]]:
+    """Index pairs of points of a and b that are each other's nearest, within reach (mm)."""
+    d = np.linalg.norm(a[:, None, :] - b[None, :, :], axis=2)
+    return [(i, j) for i, j in enumerate(d.argmin(1)) if d[:, j].argmin() == i and d[i, j] <= reach]
 
 
 def _to_outline(outline: np.ndarray, point: np.ndarray) -> float:

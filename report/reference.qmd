@@ -48,7 +48,19 @@ materials:                 # one entry per cardstock colour
   - id: red
     name: Red cardstock
     pages: [4, 5, 6, 7, 8, 9, 10]
+
+reference:                 # optional: the finished model, checked by the 3D fold
+  parts: 1                 # glues into one piece
+  openings: 4              # holes left open (e.g. two eyes, mouth, neck)
+  symmetric: true          # every piece has a mirror twin
+  triangles: 1238          # face and corner counts, when the finished model is known
+  corners: 633
 ```
+
+`make -f fold3d.mk` compares each `reference:` count it knows (`triangles`, `corners`, `parts`,
+`openings`) with the folded trace in `fold3d-baseline.csv`. A part is a set of pieces held together
+by closing glues. An opening is one closed run of rim, where an edge belongs to one surface face
+only. Glue tabs are not surface.
 
 ## Outputs
 
@@ -56,6 +68,7 @@ materials:                 # one entry per cardstock colour
 |---|---|
 | `data/<project>/<project>.svg` | One Inkscape SVG, one row of pages per cardstock (not committed); document size in inches, drawing in millimetres |
 | `data/<project>/previews/page-PP-<material>.png` | Each PDF page as rendered for tracing (not committed) |
+| `data/<project>/mirror-fixes.csv` | What the mirror-twin step changed: corners moved (`move`), folds added (`add`), fold styles matched (`style`), each with its reason |
 | `data/<project>/edge-numbers.csv` | One row per printed edge number, read by the [glue pairs](glue-pairs.qmd) page |
 | `data/<project>/README.md` | Conversion status and edge check; its first paragraph is shown on the home page |
 

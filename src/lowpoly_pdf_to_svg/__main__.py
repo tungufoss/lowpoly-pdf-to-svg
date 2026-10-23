@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import csv
 import math
 import datetime
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from .config import Project
 from .checks import TraceChecks
-from .corrections import FOLD_MM, Correction, Corrections, LineFixes, PieceFixes
+from .corrections import FOLD_MM, Correction, Corrections, LineFixes, PieceFix, PieceFixes
 from .detect import PageDetector
 from .edges import EdgeTable
 from .ocr import EdgeNumberReader, read_paper
@@ -111,6 +112,12 @@ def main() -> int:
         changed |= nudged
         print(f"moved {len(nudges.rows) - len(unmatched)} corners on {len(nudged)} pieces from the 3D fold"
               + (f", {len(unmatched)} matched no corner" if unmatched else ""))
+    mirrored, notes = mirror_fixes(results, piece_fixes, detector, page_of, output)
+    changed |= mirrored
+    _write_rows(output / "mirror-fixes.csv", notes)
+    print(f"mirror twins: " + ", ".join(f"{n} {a}" for a, n in
+                                        collections.Counter(r["action"] for r in notes).most_common())
+          + f" on {len(mirrored)} pieces (mirror-fixes.csv)" if notes else "mirror twins: nothing to fix")
     for page, layout, _ in results:
         for piece in layout.pieces:
             if piece.id in changed:
@@ -179,7 +186,8 @@ def main() -> int:
         for piece, a, b in dropped)
     gaps = [g for g in symmetry.fold_gaps() if not (g["issue"] == "missing" and undone(g))]
     with (output / f"mirror-missing-folds.csv").open("w", newline="", encoding="utf-8") as handle:
-        table_out = csv.DictWriter(handle, ["piece", "twin", "issue", "kind", "ax_mm", "ay_mm", "bx_mm", "by_mm"])
+        table_out = csv.DictWriter(handle, ["piece", "twin", "issue", "kind", "ax_mm", "ay_mm", "bx_mm", "by_mm"],
+                                   extrasaction="ignore")
         table_out.writeheader()
         table_out.writerows(gaps)
     missing = [g for g in gaps if g["issue"] == "missing"]
@@ -193,6 +201,74 @@ def main() -> int:
     writer.write(target)
     print(f"Wrote {len(pages)} page(s) to {target}. {len(flagged)} piece(s) flagged for review.")
     return 0
+
+
+def mirror_fixes(results, piece_fixes: PieceFixes, detector: PageDetector, page_of: dict,
+                 output: Path) -> tuple[set[str], list[dict]]:
+    """Mirror twins have the same faces (tabs may differ). Their face corners move to the mirrored
+    mean, a fold one twin lacks is added where the scan shows one, and mirror folds read in
+    different styles both take the style the scan shows more clearly. A twin that folded cleanly
+    in the last 3D fold is the truth for the other. Corners and folds Helga edited by hand keep
+    her version."""
+    measured = [(layout, page.mm_per_px) for page, layout, _ in results]
+    twins = Symmetry(measured)
+    hand_moved = [(r.piece, p) for r in piece_fixes.rows if r.action == "move" for p in (r.a, r.b)]
+    dropped = [(r.piece, r.a, r.b) for r in piece_fixes.rows if r.action == "drop"]
+    near = lambda piece, ends, edits: any(piece == p and min(
+        math.dist(a, ends[0]) + math.dist(b, ends[1]), math.dist(b, ends[0]) + math.dist(a, ends[1])) <= 4.0
+        for p, a, b in edits)
+    # A piece the last 3D fold flagged (corner >1 mm off, glue open) is not clean; its twin may be.
+    inspect = output / "fold3d-inspect.csv"
+    flagged = {r["piece"] for r in csv.DictReader(inspect.open(encoding="utf-8"))} if inspect.is_file() else None
+    clean = {piece.id for _, layout, _ in results for piece in layout.pieces} - flagged if flagged is not None else set()
+    rows = [r for r in twins.corner_moves(clean)
+            if not any(piece == r["piece"] and math.dist(p, (r["ax_mm"], r["ay_mm"])) <= FOLD_MM for piece, p in hand_moved)]
+    pieces = {piece.id: piece for _, layout, _ in results for piece in layout.pieces}
+    px = lambda piece, point: (point[0] / page_of[piece].mm_per_px, point[1] / page_of[piece].mm_per_px)
+    restyled = set()
+    for gap in twins.fold_gaps():
+        ends = ((gap["ax_mm"], gap["ay_mm"]), (gap["bx_mm"], gap["by_mm"]))
+        if near(gap["piece"], ends, dropped):
+            continue
+        a, b = px(gap["piece"], ends[0]), px(gap["piece"], ends[1])
+        if gap["issue"] == "missing":
+            if detector.fold_kind(page_of[gap["piece"]], a, b) is not None:
+                rows.append({"piece": gap["piece"], "action": "add", "kind": gap["kind"],
+                             "ax_mm": ends[0][0], "ay_mm": ends[0][1], "bx_mm": ends[1][0], "by_mm": ends[1][1],
+                             "note": f"fold of mirror twin {gap['twin']}, printed on the scan"})
+            continue
+        ta, tb = (px(gap["twin"], tuple(p)) for p in gap["twin_fold"])
+        here = detector.fold_evidence(page_of[gap["piece"]], a, b)
+        there = detector.fold_evidence(page_of[gap["twin"]], ta, tb)
+        if here is None or there is None:
+            continue
+        clearer = here if abs(here) >= abs(there) else there
+        kind = detector.folds["dash_dot" if clearer >= 0 else "dashed"]
+        for piece_id, p, q in ((gap["piece"], a, b), (gap["twin"], ta, tb)):
+            folds = pieces[piece_id].folds
+            if not folds:
+                continue
+            fold = min(folds, key=lambda f: min(math.dist(f.a, p) + math.dist(f.b, q), math.dist(f.a, q) + math.dist(f.b, p)))
+            if fold.kind != kind:
+                fold.kind = kind
+                restyled.add(piece_id)
+                mm = page_of[piece_id].mm_per_px
+                rows.append({"piece": piece_id, "action": "style", "kind": kind.value,
+                             "ax_mm": round(fold.a[0] * mm, 2), "ay_mm": round(fold.a[1] * mm, 2),
+                             "bx_mm": round(fold.b[0] * mm, 2), "by_mm": round(fold.b[1] * mm, 2),
+                             "note": f"mirror fold on {gap['twin'] if piece_id == gap['piece'] else gap['piece']} "
+                                     f"read differently; the scan reads {kind.value} more clearly"})
+    edits = PieceFixes([PieceFix(r["piece"], r["action"], r["kind"], (r["ax_mm"], r["ay_mm"]), (r["bx_mm"], r["by_mm"]))
+                        for r in rows if r["action"] in ("move", "add")])
+    changed, _ = edits.apply(measured, lambda piece, a, b: detector.fold_kind(page_of[piece], a, b))
+    return changed | restyled, rows
+
+
+def _write_rows(path: Path, rows: list[dict]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, ["piece", "action", "kind", "ax_mm", "ay_mm", "bx_mm", "by_mm", "note"])
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 if __name__ == "__main__":

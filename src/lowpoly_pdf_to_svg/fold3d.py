@@ -36,6 +36,7 @@ INKSCAPE = "{http://www.inkscape.org/namespaces/inkscape}"
 LABEL_REACH_MM = 3.0     # as detect.py: a number further than this from every line marks none
 LENGTH_TOLERANCE_MM = 1.0  # as edges.py: a clean pair's two lines agree this well
 SNAP_MM = 0.4            # fold ends and outline corners closer than this are one vertex
+SETTLE_MM = 0.5          # a glue still this far open after the rigid join lets its pieces bend
 
 Point = tuple[float, float]
 
@@ -992,6 +993,7 @@ class Reconstruction:
         solver.robust[:] = 1.0
         x = self._join_components(solver, x, components, max_nfev=160)
         x = self._anneal(solver, x, components)
+        x = self._settle(solver, x, components)
         self._drop_gaping(solver, x)
         self.log(f"rebuilt with {len(keep)} glues, {int((~solver.dropped).sum())} close")
         self.solver, self.x = solver, x
@@ -1093,11 +1095,8 @@ class Reconstruction:
         for i, component in enumerate(components):
             vertices = component["vertices"]
             if i in valid:
-                points = valid[i]
-                if warm is not None and len(vertices) >= 3:
-                    rotation, shift = _kabsch(points, warm[vertices])
-                    points = points @ rotation.T + shift
-                x[vertices] = points
+                # The saved pose already has this unit settled against its neighbours.
+                x[vertices] = warm[vertices] if warm is not None else valid[i]
                 self.log(f"reused {component['material']} component {i + 1}/{len(components)} "
                          f"({len(component['pieces'])} pieces)")
                 continue
@@ -1145,6 +1144,25 @@ class Reconstruction:
         if not components:
             return components, seed if seed is not None else x
         return components, x
+
+    def _settle(self, solver: FoldSolver, x: np.ndarray, components: list[dict]) -> np.ndarray:
+        """Units are moved as rigid blocks, so a unit folded on its own may not meet its
+        neighbours. Let the pieces at glues still open bend into place, with one ring of glued
+        neighbours (every face stays rigid), as a whole-model fold would. On a warm run only
+        pieces of units that may move take part."""
+        gaps = solver.gaps(x)
+        open_glues = [k for k in range(len(solver.glues)) if not solver.dropped[k] and gaps[k] > SETTLE_MM]
+        pieces = {p for k in open_glues for p in (solver.glues[k].piece, solver.glues[k].other)}
+        pieces |= {q for g in solver.glues for p, q in ((g.piece, g.other), (g.other, g.piece)) if p in pieces}
+        if self.movable is not None:
+            pieces &= {piece for i in self.movable for piece in components[i]["pieces"]}
+        if not pieces:
+            return x
+        free = [v for v, (piece, _) in self.asm.key.items() if piece in pieces]
+        self.log(f"settling {len(open_glues)} open glues: {len(pieces)} pieces may bend")
+        x = solver.solve(x, free=free, rounds=3, max_nfev=100, reweight=True)
+        self.log(f"settled: {int((solver.gaps(x) <= self.gape).sum())} glues within {self.gape:g} mm")
+        return x
 
     def _changed_units(self, components: list[dict], component_by_piece: dict, rebuilt: set[int]) -> set[int] | None:
         """Units rebuilt this run plus units whose glues to other units changed since the saved
@@ -1433,7 +1451,8 @@ class Reconstruction:
             writer.writerows(rows)
 
     def counts(self) -> dict[str, int]:
-        """Triangles of the folded surface, and its corners once every closing glue joins its ends."""
+        """Triangles of the folded surface, its corners once every closing glue joins its ends, the
+        separate parts the closing glues leave, and the openings (rim loops) of their surface."""
         parent = list(range(self.solver.n))
 
         def find(v):
@@ -1445,14 +1464,50 @@ class Reconstruction:
             if not self.solver.dropped[k]:
                 parent[find(int(p))] = find(int(q))
         corners = len({find(v) for _, verts in self.asm.faces for v in verts})
-        return {"triangles": sum(len(verts) - 2 for _, verts in self.asm.faces), "corners": corners}
+        # Surface faces only: glue tabs end up hidden under the face they are glued to.
+        surface, seen = [], collections.Counter()
+        for pid, verts in self.asm.faces:
+            if not self.asm.pieces[pid].faces[seen[pid]].tab:
+                surface.append([find(v) for v in verts])
+            seen[pid] += 1
+        part = {}
+
+        def whole(v):
+            while part.setdefault(v, v) != v:
+                v = part[v]
+            return v
+        uses = collections.Counter()
+        for ends in surface:
+            for v in ends[1:]:
+                a, b = whole(ends[0]), whole(v)
+                if a != b:
+                    part[b] = a
+            for p, q in zip(ends, ends[1:] + ends[:1]):
+                if p != q:
+                    uses[frozenset((p, q))] += 1
+        parts = len({whole(ends[0]) for ends in surface})
+        # An opening is one closed run of rim: edges that only one surface face uses.
+        rim = {}
+
+        def loop(v):
+            while rim.setdefault(v, v) != v:
+                v = rim[v]
+            return v
+        for edge, n in uses.items():
+            if n == 1:
+                a, b = (loop(v) for v in edge)
+                if a != b:
+                    rim[b] = a
+        openings = len({loop(v) for v in rim})
+        return {"triangles": sum(len(verts) - 2 for _, verts in self.asm.faces), "corners": corners,
+                "parts": parts, "openings": openings}
 
     def _baseline(self, path: Path) -> None:
         """The folded trace against the finished model's counts from the project YAML."""
         counts = self.counts()
         rows = [{"measure": key, "traced": counts[key], "reference": int(self.reference[key]),
                  "difference": counts[key] - int(self.reference[key])}
-                for key in ("triangles", "corners") if key in self.reference]
+                for key in ("triangles", "corners", "parts", "openings") if key in self.reference]
         with path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, ["measure", "traced", "reference", "difference"])
             writer.writeheader()
