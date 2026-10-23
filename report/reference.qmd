@@ -77,13 +77,15 @@ materials:                 # one entry per cardstock colour
 
 `make -f fold3d.mk` (or `python -m src.lowpoly_pdf_to_svg.fold3d --config …`) folds the traced
 pieces into `data/<project>/fold3d.obj` and its tables. A cold build of a large model takes about
-half an hour, so later runs reuse earlier work.
+half an hour, so later runs reuse earlier work. On Bowser (4 cores), a warm run that moves
+every unit takes about 4.5 minutes, and a run after a one-unit edit takes about 5 seconds.
 
 | Option | Default | Description |
 |---|---|---|
 | `--gape` | `3.0` | Let go of a glue whose ends stay this far apart (mm) |
 | `--anneal` | `5` | Cycles of hard then easy fold pull after the build |
 | `--cold` | off | Ignore saved poses and caches and place every piece from scratch (`COLD=1` in Make) |
+| `--rejoin` | off | Let the join move every unit, not only the units changed since the saved pose (`REJOIN=1` in Make) |
 
 ### Modular glue plan
 
@@ -121,7 +123,16 @@ demand, are tracked in issue #37.
   to the previous `fold3d.json`. Vertices are matched by piece id and flat position, rounded to
   0.01 mm. When at least 70 % match, their 3D positions are reused, and new or moved vertices are
   placed by aligning their piece to its unchanged corners. The piece-by-piece placement is then
-  skipped, but the whole assembly is still optimised.
+  skipped.
+- **Only changed units move in the join.** The checkpoint also records the glues between units.
+  On a warm run, the join moves only the units that were rebuilt, plus the units whose glues to
+  other units changed. Every other unit keeps its saved pose. With nothing changed, the join
+  does no work. `--rejoin` moves every unit again, and so does a first run from `fold3d.json`,
+  which has no join record.
+- **The join solve is sparse.** Each join glue ties only two units, so finite differences are
+  grouped by unit and the solve reads only the corners at the joins. The fold-pull cycles stop
+  early once a cycle changes neither the wrong-fold count nor the closed-glue count.
+- Log lines start with the elapsed time (`[mm:ss]`).
 - A missing, unreadable or poorly matching cache falls back to a cold build. Both caches are
   written only after a successful run, and Git ignores them.
 - **`fold3d-tab-overrides.json`** (optional, hand-kept) maps a face `piece-PP-NN/k` to `true`

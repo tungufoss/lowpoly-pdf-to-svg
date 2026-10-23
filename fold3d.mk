@@ -13,7 +13,8 @@
 #   make -f fold3d.mk install  extra Python dependencies (scipy, shapely, matplotlib)
 # Needs data/<project>/<project>.svg from a full `make` first.
 # Checkpoints after piece placement and reuses the pose on retries or geometry edits;
-# pass COLD=1 for a full rebuild.
+# pass COLD=1 for a full rebuild. The join between colour units moves only units changed since
+# the saved pose; REJOIN=1 lets it move every unit.
 
 PYTHON  ?= python3
 CONFIG  ?= data/example/example.yaml
@@ -28,7 +29,7 @@ VIEWER_PATH ?= $(if $(wildcard $(VIEW_ROOT)/app/fold3d-viewer.html),app/fold3d-v
 fold3d: $(OUT)/fold3d.obj
 
 $(OUT)/fold3d.obj: $(OUT)/$(PROJECT).svg src/lowpoly_pdf_to_svg/fold3d.py src/lowpoly_pdf_to_svg/glueplan.py
-	$(PYTHON) -m src.lowpoly_pdf_to_svg.fold3d --config $(CONFIG) $(if $(filter 1,$(COLD)),--cold,)
+	$(PYTHON) -m src.lowpoly_pdf_to_svg.fold3d --config $(CONFIG) $(if $(filter 1,$(COLD)),--cold,) $(if $(filter 1,$(REJOIN)),--rejoin,)
 
 plan: $(OUT)/$(PROJECT).svg
 	$(PYTHON) -m src.lowpoly_pdf_to_svg.glueplan --config $(CONFIG)
@@ -36,6 +37,6 @@ plan: $(OUT)/$(PROJECT).svg
 install:
 	$(PYTHON) -m pip install -r requirements-fold3d.txt
 
-view:   # no rebuild: the fold takes about half an hour, run `make -f fold3d.mk` first
+view:   # no rebuild: run `make -f fold3d.mk` first
 	@echo "Open http://127.0.0.1:$(PORT)/$(VIEWER_PATH)?json=/data/$(PROJECT)/fold3d.json&svg=/data/$(PROJECT)/$(PROJECT).svg"
 	$(PYTHON) -m http.server $(PORT) --bind 127.0.0.1 --directory "$(VIEW_ROOT)"
