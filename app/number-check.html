@@ -31,6 +31,24 @@ main.wide{max-width:none}
 .hint{font-size:12px;color:#ff7800}
 select{font:inherit;padding:3px;border:1px solid var(--line);border-radius:6px}
 .meta{font-size:13px;color:var(--muted)}
+#cardstock-tint-control{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:13px}
+#cardstock-tint-control input{width:110px;padding:0}
+body.embedded-piece-review header{padding:0;border:0;gap:0}
+body.embedded-piece-review header h1,body.embedded-piece-review #count,
+body.embedded-piece-review #three-toggle,body.embedded-piece-review #rebuild-3d{display:none!important}
+body.embedded-piece-review #server-status{flex-basis:100%;margin:0}
+#server-status{flex-basis:100%;font-weight:600;color:#7a3b00}
+#server-status:empty{display:none}
+body.server-review #server-status{padding:8px 12px;border-radius:6px;background:#fff3cd;border:1px solid #e3c46b}
+body.server-review #server-status.busy{display:flex;align-items:center;gap:9px}
+body.server-review #server-status.busy:before{content:"";display:inline-block;flex:0 0 15px;width:15px;height:15px;border:2px solid #d7b85b;border-top-color:#7a3b00;border-radius:50%;animation:review-spin .8s linear infinite}
+@keyframes review-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){body.server-review #server-status.busy:before{animation:none;border-top-color:#7a3b00}}
+body.server-review #server-status.success{color:#176b2c;background:#e8f5eb;border-color:#a8d5b2}
+body.server-review #server-status.error{color:#9c1c1c;background:#fdeaea;border-color:#e6aaaa;white-space:pre-wrap}
+.review-3d{padding:10px 16px;background:#fff;border-bottom:1px solid var(--line)}
+.review-3d iframe{width:100%;height:min(65vh,760px);border:1px solid var(--line);border-radius:8px;margin-top:8px}
+.dropped-point{fill:#fff;stroke:#e00000;stroke-width:.7}
 .read{font-size:20px;font-weight:600}
 .row{display:flex;gap:6px;align-items:center}
 input{font:inherit;width:70px;padding:4px 6px;border:1px solid var(--line);border-radius:6px}
@@ -49,18 +67,142 @@ button.next{background:var(--ok);color:#fff;border-color:var(--ok);font-weight:6
 <header><h1 id="title">Number check</h1>
 <button id="open">Open data folder</button><select id="model" hidden></select><button id="change" class="meta">Other folder…</button><label class="meta">or load <input type="file" id="file" accept=".json" style="width:auto"></label>
 <span id="count"></span>
+<label id="cardstock-tint-control">Cardstock tint <input id="cardstock-tint-strength" type="range" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
+<span id="server-status" role="status" aria-live="polite"></span>
 <button data-f="pieces">Piece review</button><button data-f="todo" class="on">To do</button><button data-f="doubt">Doubtful fixes</button><button data-f="suggested">Suggested</button>
 <button data-f="open">Open</button><button data-f="auto">Fixed for you</button><button data-f="all">All</button>
+<button id="three-toggle" hidden>Show 3D</button><button id="rebuild-3d" hidden>Rebuild 3D</button>
 <button class="save" id="save">Save corrections</button></header>
+<section id="review-3d" class="review-3d" hidden>
+  <iframe id="review-3d-frame" title="3D model viewer"></iframe>
+</section>
 <main id="list"><p>Run <code>make fix</code>, then open this repository's <code>data</code> folder and pick a model
 (any folder holding a <code>check-page.json</code> from <code>make fix</code>). The page remembers the folder,
 so next time Open only asks to allow it again. Save writes
 <code>number-corrections.csv</code> into the same folder, and the next build applies it.
 Without folder access (Firefox), load the JSON file instead and Save downloads the CSV.</p></main>
 <script>
-let D = null, folder = null, store = "", answers = {}, saved = [], lines = {}, pieceFixes = {}, order = null, at = 0;
+let D = null, folder = null, store = "", answers = {}, saved = [], lines = {}, pieceFixes = {}, order = null, at = 0, cardAt = 0;
+const reviewedNumbers = new Set();
+let tintStrength = Number(localStorage.getItem("piece-review-tint-strength") || 55);
+function cardstockTint(hex) {
+  const c = /^#([0-9a-f]{6})$/i.exec(hex || "");
+  if (!c) return "#f5ead6";
+  const n = Number.parseInt(c[1], 16), mix = v => Math.round(v * 0.32 + 255 * 0.68);
+  return `#${[mix(n >> 16), mix((n >> 8) & 255), mix(n & 255)].map(v => v.toString(16).padStart(2, "0")).join("")}`;
+}
+function setTintStrength(value) {
+  tintStrength = Math.max(0, Math.min(100, Number(value) || 0));
+  document.getElementById("cardstock-tint-value").textContent = `${tintStrength}%`;
+  document.querySelectorAll(".cardstock-tint").forEach(p => p.setAttribute("fill-opacity",
+    p.classList.contains("tab-tint") ? "1" : String(tintStrength / 100)));
+  localStorage.setItem("piece-review-tint-strength", String(tintStrength));
+}
+function modelTabFaces(model) {
+  // Tabs must be explicitly classified by the model builder. Inferring them
+  // from glue edges can hide a real surface face and falsify mirror comparison.
+  return new Set((model.faces || []).map((face, i) => face.tab === true ? i : -1).filter(i => i >= 0));
+}
+function alignModelFaces(faces, outline) {
+  if (!faces.length || outline.length < 3) return p => p;
+  const key = p => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)}`;
+  const points = new Map(), edges = new Map();
+  for (const face of faces) for (let i = 0; i < face.flat.length; i++) {
+    const a = face.flat[i], b = face.flat[(i + 1) % face.flat.length], ka = key(a), kb = key(b);
+    points.set(ka, a); points.set(kb, b);
+    const edge = ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+    const item = edges.get(edge) || {a: ka, b: kb, count: 0}; item.count++; edges.set(edge, item);
+  }
+  const boundary = [...edges.values()].filter(e => e.count === 1), adjacent = new Map();
+  for (const e of boundary) for (const [a, b] of [[e.a, e.b], [e.b, e.a]]) {
+    if (!adjacent.has(a)) adjacent.set(a, []); adjacent.get(a).push(b);
+  }
+  let bestLoop = [], remaining = new Set(boundary.map(e => [e.a, e.b].sort().join("|")));
+  while (remaining.size) {
+    const first = remaining.values().next().value.split("|");
+    let loop = [first[0]], prev = first[0], current = first[1]; remaining.delete(first.join("|"));
+    loop.push(current);
+    while (current !== loop[0]) {
+      const next = (adjacent.get(current) || []).find(n => n !== prev && remaining.has([current, n].sort().join("|")));
+      if (!next) break;
+      remaining.delete([current, next].sort().join("|")); prev = current; current = next; loop.push(current);
+    }
+    if (loop.length > bestLoop.length) bestLoop = loop;
+  }
+  const source = bestLoop.map(k => points.get(k));
+  if (source.length < 3) return p => p;
+  const sample = (poly, count) => {
+    const lengths = poly.map((p, i) => Math.hypot(poly[(i + 1) % poly.length][0] - p[0], poly[(i + 1) % poly.length][1] - p[1]));
+    const total = lengths.reduce((a, b) => a + b, 0);
+    return Array.from({length: count}, (_, i) => {
+      let d = total * i / count, edge = 0;
+      while (edge < lengths.length - 1 && d > lengths[edge]) d -= lengths[edge++];
+      const a = poly[edge], b = poly[(edge + 1) % poly.length], t = d / (lengths[edge] || 1);
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    });
+  };
+  const count = 96, src = sample(source, count), dst = sample(outline, count);
+  const centre = p => p.reduce((c, q) => [c[0] + q[0] / p.length, c[1] + q[1] / p.length], [0, 0]);
+  let best = null;
+  for (const reflect of [false, true]) for (const reverse of [false, true]) for (let shift = 0; shift < count; shift++) {
+    const a = src.map(([x, y]) => [reflect ? -x : x, y]), b = dst.map((_, i) => dst[(shift + (reverse ? count - i : i)) % count]);
+    const ac = centre(a), bc = centre(b);
+    let A = 0, B = 0, norm = 0;
+    for (let i = 0; i < count; i++) {
+      const x = a[i][0] - ac[0], y = a[i][1] - ac[1], X = b[i][0] - bc[0], Y = b[i][1] - bc[1];
+      A += x * X + y * Y; B += x * Y - y * X; norm += x * x + y * y;
+    }
+    const scale = Math.hypot(A, B) / (norm || 1), angle = Math.atan2(B, A), c = Math.cos(angle), s = Math.sin(angle);
+    let error = 0;
+    for (let i = 0; i < count; i++) {
+      const x = (a[i][0] - ac[0]) * scale, y = (a[i][1] - ac[1]) * scale;
+      error += (c * x - s * y + bc[0] - b[i][0]) ** 2 + (s * x + c * y + bc[1] - b[i][1]) ** 2;
+    }
+    if (!best || error < best.error) best = {error, reflect, ac, bc, scale, c, s};
+  }
+  return ([x, y]) => {
+    const u = (best.reflect ? -x : x) - (best.reflect ? -best.ac[0] : best.ac[0]), v = y - best.ac[1];
+    return [best.bc[0] + best.scale * (best.c * u - best.s * v), best.bc[1] + best.scale * (best.s * u + best.c * v)];
+  };
+}
+document.getElementById("cardstock-tint-strength").value = String(tintStrength);
+document.getElementById("cardstock-tint-strength").addEventListener("input", e => setTintStrength(e.target.value));
+setTintStrength(tintStrength);
+const reviewParams = new URLSearchParams(location.search);
+const reviewServer = reviewParams.has("server");
+const embeddedPieceReview = reviewParams.has("embed");
+const requestedPiece = reviewParams.get("piece");
+const mirrorOnly = embeddedPieceReview;
+const mirrorAcceptedKey = () => `mirror-geometry-accepted:${D?.project || "model"}`;
+function faceShapeDistances(piece) {
+  const faces = (D.foldModel?.faces || []).filter(face => face.piece === piece && face.tab !== true);
+  return faces.map(face => {
+    // `flat` is the traced paper geometry in millimetres; compare it before
+    // folded-solver stretch can distort a face.
+    const points = face.flat;
+    return points.flatMap((a, i) => points.slice(i + 1).map(b => Math.hypot(a[0] - b[0], a[1] - b[1])));
+  });
+}
+function mirrorDifference(a, b) {
+  const left = faceShapeDistances(a), right = faceShapeDistances(b);
+  if (left.length !== right.length) return `face count differs (${left.length} vs ${right.length})`;
+  const used = new Set();
+  for (const edges of left) {
+    let best = -1, bestError = Infinity;
+    for (let j = 0; j < right.length; j++) if (!used.has(j) && right[j].length === edges.length) {
+      const x = [...edges].sort((m,n)=>m-n), y = [...right[j]].sort((m,n)=>m-n);
+      const error = Math.max(0, ...x.map((v,k)=>Math.abs(v-y[k])));
+      if (error < bestError) { best = j; bestError = error; }
+    }
+    if (best < 0) return "face shapes or triangle counts differ";
+    if (bestError > 0.1) return `face edge lengths differ by up to ${bestError.toFixed(2)} mm`;
+    used.add(best);
+  }
+  return "";
+}
 const key = p => `${p.piece}@${p.x},${p.y}`;
 let filter = "todo";
+let fold3dStale = true, viewerLoaded = false, selected3dPiece = null;
 
 function parseCsv(text) {
   // Quoted fields (a note with commas or line breaks) are read whole.
@@ -80,13 +222,15 @@ function parseCsv(text) {
 }
 const csvField = v => /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : v;
 function start(data, corrections, drawn = [], reviewed = []) {
-  D = data; saved = corrections; store = "fix-" + D.project; answers = {}; lines = {}; pieceFixes = {}; order = null;
+  D = data; saved = corrections; store = "fix-" + D.project; answers = {}; lines = {}; pieceFixes = {}; reviewedNumbers.clear(); order = null; cardAt = 0;
   for (const r of reviewed) {
-    const f = pieceFixes[r.piece] ??= {ok: false, add: [], drop: [], move: [], note: "", log: [], numbers: []};
+    if (r.action === "number-ok") { reviewedNumbers.add(`${r.piece}@${r.ax_mm},${r.ay_mm}`); continue; }
+    const f = pieceFixes[r.piece] ??= {ok: false, add: [], drop: [], move: [], pointDrop: [], note: "", log: [], numbers: []};
     if (r.action === "ok") f.ok = true;
     else if (r.action === "note") f.note = r.note;
     else if (r.action === "number") f.numbers.push({x: +r.ax_mm, y: +r.ay_mm, number: r.kind});
     else if (r.action === "move") f.move.push({a: [+r.ax_mm, +r.ay_mm], b: [+r.bx_mm, +r.by_mm]});
+    else if (r.action === "drop-point") f.pointDrop.push([+r.ax_mm, +r.ay_mm]);
     else (r.action === "add" ? f.add : f.drop).push({kind: r.kind, a: [+r.ax_mm, +r.ay_mm], b: [+r.bx_mm, +r.by_mm]});
   }
   for (const s of saved) answers[`${s.piece}@${s.x_mm},${s.y_mm}`] = s.number;
@@ -99,6 +243,92 @@ function start(data, corrections, drawn = [], reviewed = []) {
   document.title = document.getElementById("title").textContent;
   render();
 }
+async function loadServerModel() {
+  const model = new URLSearchParams(location.search).get("model");
+  if (!model) throw new Error("Missing model name in review URL.");
+  const response = await fetch(`/api/model?model=${encodeURIComponent(model)}`);
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Could not load model review data.");
+  try {
+    const folded = await (await fetch(`/api/fold3d?model=${encodeURIComponent(model)}`)).json();
+    result.check.foldModel = folded;
+    result.check.tabFaces = [...modelTabFaces(folded)];
+    result.check.cardstockColors = Object.fromEntries(Object.entries(folded.pieces || {})
+      .map(([piece, data]) => [piece, folded.colours?.[data.material] || "#eddbb2"]));
+  } catch (e) { result.check.cardstockColors = {}; }
+  folder = {name: model};
+  fold3dStale = result.fold3d_stale;
+  document.getElementById("rebuild-3d").hidden = !fold3dStale;
+  document.getElementById("three-toggle").hidden = false;
+  start(result.check, result.corrections, result.lines, result.reviewed);
+  document.getElementById("count").textContent = "OK saves this item. The 3D glue rebuild is manual.";
+}
+if (reviewServer) {
+  document.body.classList.add("server-review");
+  filter = "pieces";
+  for (const id of ["open", "change", "file", "model"]) document.getElementById(id).hidden = true;
+  if (embeddedPieceReview) {
+    document.body.classList.add("embedded-piece-review");
+    document.querySelectorAll("header [data-f], #three-toggle, #rebuild-3d").forEach(button => button.hidden = true);
+  }
+  document.getElementById("save").hidden = true;
+  document.querySelector("header label").hidden = true;
+  document.getElementById("list").innerHTML = "<p>Loading review data…</p>";
+  loadServerModel().catch(e => { document.getElementById("list").innerHTML = `<p>Could not start review: ${e.message}</p>`; });
+}
+const threePanel = document.getElementById("review-3d"), threeFrame = document.getElementById("review-3d-frame");
+function viewerUrl() {
+  const model = new URLSearchParams(location.search).get("model");
+  const params = new URLSearchParams({model, json: `/api/fold3d?model=${encodeURIComponent(model)}`,
+    svg: `/api/svg?model=${encodeURIComponent(model)}`});
+  return `/app/fold3d-viewer.html?${params}`;
+}
+document.getElementById("three-toggle").addEventListener("click", e => {
+  if (threePanel.hidden) {
+    threePanel.hidden = false; e.target.textContent = "Hide 3D";
+    if (!viewerLoaded) threeFrame.src = viewerUrl();
+  } else {
+    threePanel.hidden = true; e.target.textContent = "Show 3D";
+    // Unload WebGL when hidden so the review page stays light.
+    threeFrame.src = "about:blank"; viewerLoaded = false;
+  }
+});
+threeFrame.addEventListener("load", () => {
+  viewerLoaded = threeFrame.src.includes("/app/fold3d-viewer.html") && !threePanel.hidden;
+  if (viewerLoaded && selected3dPiece) showPieceIn3d(selected3dPiece);
+});
+function showPieceIn3d(piece) {
+  selected3dPiece = piece;
+  if (!viewerLoaded || !threeFrame.contentWindow) return;
+  threeFrame.contentWindow.postMessage({type: "review-select-piece", piece}, location.origin);
+}
+window.addEventListener("message", e => {
+  if (e.origin !== location.origin || e.source !== threeFrame.contentWindow) return;
+  if (e.data?.type === "fold3d-ready") { if (selected3dPiece) showPieceIn3d(selected3dPiece); return; }
+  if (e.data?.type !== "fold3d-select-piece") return;
+  if (!D?.pieces?.some(p => p.piece === e.data.piece)) return;
+  order ??= pieceOrder();
+  const index = order.findIndex(unit => unit.some(p => p.piece === e.data.piece));
+  if (index < 0) return;
+  filter = "pieces"; at = index; selected3dPiece = e.data.piece; render();
+});
+document.getElementById("rebuild-3d").addEventListener("click", async e => {
+  e.target.disabled = true; e.target.textContent = "Rebuilding 3D…";
+  const status = document.getElementById("server-status");
+  status.className = "busy"; status.textContent = "Rebuilding the 3D model and glue gaps. This can take a while; progress is in the Git Bash window.";
+  try {
+    const response = await fetch("/api/rebuild-3d", {method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({model: new URLSearchParams(location.search).get("model")})});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "3D rebuild failed");
+    fold3dStale = false; e.target.hidden = true;
+    status.className = "success"; status.textContent = result.message;
+    if (viewerLoaded) { threeFrame.src = viewerUrl() + `&refresh=${Date.now()}`; }
+  } catch (err) {
+    status.className = "error"; status.textContent = `3D rebuild failed: ${err.message}`;
+    e.target.disabled = false; e.target.textContent = "Retry 3D rebuild";
+  }
+});
 // The chosen data folder is remembered (IndexedDB holds the handle) so the picker is a one-time step.
 const db = () => new Promise((ok, fail) => { const r = indexedDB.open("number-check", 1);
   r.onupgradeneeded = () => r.result.createObjectStore("handles"); r.onsuccess = () => ok(r.result); r.onerror = fail; });
@@ -218,7 +448,7 @@ function scan(p, onDrawn) {
   return wrap;
 }
 let touched = new Set();
-const done = c => c.kind === "auto" || (c.kind === "doubt" ? c.panels.some(p => touched.has(key(p)))
+const done = c => (reviewServer && c.panels.every(p => reviewedNumbers.has(key(p)))) || c.kind === "auto" || (c.kind === "doubt" ? c.panels.some(p => touched.has(key(p)))
   : c.panels.some(p => answers[key(p)] !== undefined && answers[key(p)] !== ""));
 
 function render() {
@@ -236,7 +466,33 @@ function render() {
   head.textContent = `${FILTERS[filter]}: ${shown.length} card${shown.length === 1 ? "" : "s"}`;
   list.appendChild(head);
   if (!shown.length) list.insertAdjacentHTML("beforeend", "<p class=\"meta\">Nothing here.</p>");
-  for (const c of shown.slice(0, 200)) list.appendChild(card(c));
+  else if (reviewServer) {
+    cardAt = Math.min(cardAt, shown.length - 1);
+    const c = shown[cardAt];
+    const nav = document.createElement("div"); nav.className = "card nav";
+    nav.innerHTML = `<span class="meta">Review item ${cardAt + 1} of ${shown.length}</span><button data-a="back">← Back</button><button data-a="skip">Skip</button><button class="next" data-a="ok">OK → next</button>`;
+    nav.querySelector("[data-a=back]").disabled = cardAt === 0;
+    nav.querySelector("[data-a=back]").addEventListener("click", () => { cardAt = Math.max(0, cardAt - 1); render(); });
+    nav.querySelector("[data-a=skip]").addEventListener("click", () => { cardAt = Math.min(shown.length - 1, cardAt + 1); render(); });
+    nav.querySelector("[data-a=ok]").addEventListener("click", async e => {
+      const button = e.currentTarget; button.disabled = true;
+      c.panels.forEach(p => reviewedNumbers.add(key(p)));
+      remember();
+      const status = document.getElementById("server-status");
+      status.className = "busy"; status.textContent = "Saving this review item…";
+      try {
+        const result = await save(true);
+        status.className = result.rebuilt ? "success" : ""; status.textContent = result.message;
+        if (result.fold3d_stale) { fold3dStale = true; document.getElementById("rebuild-3d").hidden = false; }
+        if (filter !== "todo") cardAt = Math.min(shown.length - 1, cardAt + 1);
+        render();
+      } catch (err) {
+        status.className = "error"; status.textContent = `Save or rebuild failed: ${err.message}. Press OK to retry.`;
+        button.disabled = false;
+      }
+    });
+    list.append(nav, card(c));
+  } else for (const c of shown.slice(0, 200)) list.appendChild(card(c));
   window.scrollTo(0, 0);
 }
 
@@ -303,7 +559,7 @@ function card(c) {
 // Piece review: one whole piece at a time, those needing the most work first (shuffled among
 // equals). Click two points to add a fold the trace missed; in remove mode click a fold to drop
 // it; click a number to correct it. OK saves into the folder and moves to the next piece.
-const fixOf = id => { const f = pieceFixes[id] ??= {ok: false, add: [], drop: []}; f.move ??= []; f.note ??= ""; f.log ??= []; f.numbers ??= []; return f; };
+const fixOf = id => { const f = pieceFixes[id] ??= {ok: false, add: [], drop: []}; f.move ??= []; f.pointDrop ??= []; f.note ??= ""; f.log ??= []; f.numbers ??= []; return f; };
 const movedIn = (f, c) => { const m = (f.move || []).find(m => Math.hypot(m.a[0] - c[0], m.a[1] - c[1]) < 0.3); return m ? m.b : c; };
 const segDist = (q, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx * dx + dy * dy || 1;
   const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l));
@@ -316,27 +572,94 @@ function pieceOrder() {
     if (seen.has(p.piece)) continue;
     const unit = [p, byId[p.twin]].filter(Boolean).filter(q => !seen.has(q.piece));
     unit.forEach(q => seen.add(q.piece));
-    units.push({unit, score: Math.max(...unit.map(q => q.score)), r: Math.random()});
+    const worldX = q => {
+      const faces = (D.foldModel?.faces || []).filter(face => face.piece === q.piece);
+      const xs = faces.flatMap(face => face.v.map(v => D.foldModel.vertices[v]?.[0]).filter(Number.isFinite));
+      return xs.length ? xs.reduce((sum, x) => sum + x, 0) / xs.length : null;
+    };
+    const leftX = worldX(unit[0]), rightX = worldX(unit[1]);
+    if (leftX !== null && rightX !== null && leftX > rightX) unit.reverse();
+    const difference = unit.length === 2 ? mirrorDifference(unit[0].piece, unit[1].piece) : "";
+    units.push({unit, difference, score: Math.max(...unit.map(q => q.score)), r: Math.random()});
   }
   const ok = u => u.unit.every(q => fixOf(q.piece).ok);
   units.sort((u, v) => (ok(u) - ok(v)) || (v.score - u.score) || (u.r - v.r));
+  if (mirrorOnly) {
+    let accepted = {};
+    try { accepted = JSON.parse(localStorage.getItem(mirrorAcceptedKey()) || "{}"); } catch (e) {}
+    const filtered = units.filter(u => u.difference && !accepted[[...u.unit.map(q => q.piece)].sort().join("|")]);
+    if (requestedPiece) {
+      const selected = filtered.findIndex(u => u.unit.some(q => q.piece === requestedPiece));
+      if (selected >= 0) at = selected;
+    }
+    return filtered.map(u => u.unit);
+  }
+  if (requestedPiece) {
+    const selected = units.find(u => u.unit.some(q => q.piece === requestedPiece));
+    return selected ? [selected.unit] : [];
+  }
   return units.map(u => u.unit);
 }
 function reviewPiece(list) {
   if (!D.pieces) { list.innerHTML = "<p>This check file has no pieces; run <code>make fix</code> again.</p>"; return; }
   order ??= pieceOrder();
+  if (!order.length) { list.innerHTML = `<p>${mirrorOnly ? "No unaccepted mirror geometry discrepancies remain." : `No piece review data found for ${requestedPiece || "this model"}.`}</p>`; return; }
   at = Math.max(0, Math.min(at, order.length - 1));
   const unit = order[at];
+  showPieceIn3d(selected3dPiece && unit.some(q => q.piece === selected3dPiece) ? selected3dPiece : unit[0].piece);
+  if (embeddedPieceReview && window.parent !== window)
+    window.parent.postMessage({type: "piece-review-pair", pieces: unit.map(q => q.piece)},
+      reviewParams.get("parentOrigin") || location.origin);
   const reviewed = D.pieces.filter(p => fixOf(p.piece).ok).length;
+  const difference = unit.length === 2 ? mirrorDifference(unit[0].piece, unit[1].piece) : "";
   document.getElementById("count").textContent = `pair ${at + 1} of ${order.length} · ${reviewed} of ${D.pieces.length} pieces reviewed`;
   const nav = document.createElement("div");
   nav.className = "card nav";
-  nav.innerHTML = `<span class="meta">${unit.length > 1 ? `<b>${unit[0].piece}</b> and its mirror twin <b>${unit[1].piece}</b>, side by side: they should match, mirrored.` : "This piece has no mirror twin."}</span>
-    <button data-a="back">← Back</button><button data-a="skip">Skip</button><button class="next" data-a="ok">OK → next</button>`;
-  const go = step => { at += step; list.innerHTML = ""; reviewPiece(list); window.scrollTo(0, 0); };
+  nav.innerHTML = `<span class="meta">${embeddedPieceReview ? `Editing <b>${unit.map(q => q.piece).join(" and ")}</b>.` : unit.length > 1 ? `<b>${unit[0].piece}</b> and its mirror twin <b>${unit[1].piece}</b>, side by side: they should match, mirrored.` : "This piece has no mirror twin."}</span>
+    <button data-a="back">← Back</button><button data-a="skip">Skip</button><button class="next" data-a="ok">${embeddedPieceReview ? "Save and close" : "OK → next"}</button>`;
+  if (embeddedPieceReview) {
+    nav.querySelector("[data-a=back]").hidden = true;
+    nav.querySelector("[data-a=skip]").hidden = true;
+  }
+  const go = step => { at += step; selected3dPiece = order[at]?.[0]?.piece || null; list.innerHTML = ""; reviewPiece(list); window.scrollTo(0, 0); };
   nav.querySelector("[data-a=back]").addEventListener("click", () => go(-1));
   nav.querySelector("[data-a=skip]").addEventListener("click", () => go(1));
-  nav.querySelector("[data-a=ok]").addEventListener("click", () => { unit.forEach(q => fixOf(q.piece).ok = true); remember(); save(true); go(1); });
+  nav.querySelector("[data-a=ok]").addEventListener("click", async () => {
+    unit.forEach(q => fixOf(q.piece).ok = true); remember();
+    const button = nav.querySelector("[data-a=ok]"); button.disabled = true;
+    if (reviewServer) {
+      try {
+        document.getElementById("server-status").className = "busy";
+        document.getElementById("server-status").textContent = "Saving this pair. If you changed it, the affected 2D pages will be refreshed from cached traces. The slow 3D glue rebuild is manual.";
+        const result = await save(true);
+        if (!result) throw new Error("The save did not complete.");
+        if (result.fold3d_stale) { fold3dStale = true; document.getElementById("rebuild-3d").hidden = false; }
+        document.getElementById("server-status").className = result.rebuilt ? "success" : "";
+        document.getElementById("server-status").textContent = result.message;
+        if (embeddedPieceReview) {
+          window.parent.postMessage({type: "piece-review-saved", pieces: unit.map(q => q.piece)}, "*");
+          return;
+        }
+        go(1);
+      } catch (e) {
+        document.getElementById("server-status").className = "error";
+        document.getElementById("server-status").textContent = `Save or rebuild failed: ${e.message}. Your edits remain on this page; press OK to retry.`;
+        button.disabled = false;
+      }
+    } else { save(true); go(1); }
+  });
+  if (embeddedPieceReview) {
+    nav.querySelector(".meta").textContent = `Mirror discrepancy ${at + 1} of ${order.length}: ${unit.map(q => q.piece).join(" and ")} — ${difference}.`;
+    const accept = document.createElement("button"); accept.textContent = "Accept difference & next";
+    accept.addEventListener("click", () => {
+      let accepted = {};
+      try { accepted = JSON.parse(localStorage.getItem(mirrorAcceptedKey()) || "{}"); } catch (e) {}
+      accepted[[...unit.map(q => q.piece)].sort().join("|")] = {acceptedAt: new Date().toISOString(), reason: "manual"};
+      localStorage.setItem(mirrorAcceptedKey(), JSON.stringify(accepted));
+      order = null; at = 0; list.innerHTML = ""; reviewPiece(list);
+    });
+    nav.appendChild(accept);
+  }
   list.appendChild(nav);
   const pair = document.createElement("div");
   pair.className = "pair";
@@ -349,7 +672,23 @@ function pieceCard(q, list, rerender) {
   // Dragged corners take the folds that end at them along.
   const at_ = c => movedIn(f, c);
   const outline = t.outline.map(at_);
-  const folds = t.folds.map(g => [...at_([g[0], g[1]]), ...at_([g[2], g[3]])]);
+  const pointDropIndex = p => outline.findIndex(c => Math.hypot(c[0] - p[0], c[1] - p[1]) < 0.5);
+  const project = (p, a, b) => { const dx=b[0]-a[0],dy=b[1]-a[1],d=dx*dx+dy*dy||1;
+    const k=Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/d)); return [a[0]+k*dx,a[1]+k*dy]; };
+  const activeOutline = outline.filter(c => !f.pointDrop.some(p => Math.hypot(c[0]-p[0],c[1]-p[1]) < 0.5));
+  const relocate = c => {
+    const i = pointDropIndex(c);
+    if (i < 0 || !f.pointDrop.some(p => Math.hypot(c[0]-p[0],c[1]-p[1]) < 0.5)) return c;
+    return project(c, outline[(i + outline.length - 1) % outline.length], outline[(i + 1) % outline.length]);
+  };
+  const folds = t.folds.map(g => { const a=at_([g[0],g[1]]),b=at_([g[2],g[3]]),ra=relocate(a),rb=relocate(b); return [...ra,...rb]; });
+  const tint = cardstockTint(D.cardstockColors?.[q.piece] || "#eddbb2");
+  const modelFaces = (D.foldModel?.faces || []).map((face, i) => ({face, i})).filter(x => x.face.piece === q.piece);
+  const mapModelPoint = alignModelFaces(modelFaces.map(x => x.face), t.outline);
+  const faceTints = modelFaces.map(({face, i}) => {
+    const isTab = (D.tabFaces || []).includes(i);
+    return `<polygon class="cardstock-tint${isTab ? " tab-tint" : ""}" points="${face.flat.map(mapModelPoint).map(c => c.join(",")).join(" ")}" fill="${isTab ? "#ffffff" : tint}" fill-opacity="${isTab ? "1" : tintStrength / 100}"/>`;
+  }).join("");
   const same = (d, g) => { const a = at_(d.a), b = at_(d.b);
     return Math.min(Math.hypot(a[0] - g[0], a[1] - g[1]) + Math.hypot(b[0] - g[2], b[1] - g[3]),
                     Math.hypot(a[0] - g[2], a[1] - g[3]) + Math.hypot(b[0] - g[0], b[1] - g[1])) < 0.5; };
@@ -360,10 +699,13 @@ function pieceCard(q, list, rerender) {
   el.className = "card review";
   el.innerHTML = `<div class="scan"><img src="${q.image}" alt="scan of ${q.piece}">
     <svg viewBox="${left} ${top} ${side} ${side}">
-      <polygon class="trace" points="${outline.map(c => c.join(",")).join(" ")}" style="stroke-width:${r * 0.8}"/>
+      ${faceTints || `<polygon class="cardstock-tint" points="${activeOutline.map(c => c.join(",")).join(" ")}" fill="${tint}" fill-opacity="${tintStrength / 100}"/>`}
+      <polygon class="trace" points="${activeOutline.map(c => c.join(",")).join(" ")}" style="stroke-width:${r * 0.8}"/>
       ${t.folds.map((g, i) => `<line class="${isDropped(i) ? "dropped" : "fold"}" x1="${folds[i][0]}" y1="${folds[i][1]}" x2="${folds[i][2]}" y2="${folds[i][3]}" stroke-dasharray="${r * 3} ${r * 1.5}" style="stroke-width:${r * 1.1}"/>`).join("")}
       ${f.add.map(g => `<line class="added" x1="${g.a[0]}" y1="${g.a[1]}" x2="${g.b[0]}" y2="${g.b[1]}" stroke-dasharray="${g.kind === "mountain" ? `${r * 4} ${r * 1.5} ${r} ${r * 1.5}` : `${r * 3} ${r * 1.5}`}" style="stroke-width:${r * 1.6}"/>`).join("")}
-      ${outline.map((c, i) => `<circle class="corner" data-i="${i}" cx="${c[0]}" cy="${c[1]}" r="${r * (mode === "move" ? 2.6 : 1.6)}" style="stroke-width:${r * 0.6}${f.move.some(m => m.b === c) ? ";fill:#c000ff" : ""}"/>`).join("")}
+      ${outline.map((c, i) => f.pointDrop.some(p => Math.hypot(c[0]-p[0],c[1]-p[1]) < 0.5)
+        ? `<g class="removed-point"><circle class="dropped-point" cx="${c[0]}" cy="${c[1]}" r="${r*3}"/><text x="${c[0]}" y="${c[1]+r*1.5}" text-anchor="middle" fill="#e00000" font-size="${r*4}">×</text></g>`
+        : `<circle class="corner" data-i="${i}" cx="${c[0]}" cy="${c[1]}" r="${r * (mode === "move" ? 2.6 : 1.6)}" style="stroke-width:${r * 0.6}${f.move.some(m => m.b === c) ? ";fill:#c000ff" : ""}"/>`).join("")}
       ${pending.map((g, i) => `<line class="suggest" data-s="${i}" x1="${g.a[0]}" y1="${g.a[1]}" x2="${g.b[0]}" y2="${g.b[1]}" stroke="#ff7800" stroke-opacity=".8" stroke-dasharray="${r * 2} ${r * 2}" style="stroke-width:${r * 2.2}"/>`).join("")}
       ${q.labels.map(l => { const gone = answers[`${q.piece}@${l.x},${l.y}`] === "x";
         return `<g class="label" data-k="${l.x},${l.y}"><circle cx="${l.x}" cy="${l.y}" r="${r * 6}" fill="${gone ? "#e00000" : "#5060d0"}" fill-opacity=".12" stroke="${gone ? "#e00000" : "#5060d0"}" style="stroke-width:${r * 0.7}"/>
@@ -374,7 +716,7 @@ function pieceCard(q, list, rerender) {
     </svg></div>
     <div class="side"><div><span class="read">${q.piece}</span> <span class="meta">${t.outline.length} corners, ${t.folds.length} traced folds${f.ok ? " · reviewed" : ""}</span></div>
       <div class="meta">${q.why.length ? q.why.map(w => `<div class="hint">${w}</div>`).join("") : "Nothing flagged; check the corners and folds look complete."}</div>
-      <div class="tools"><button data-m="add">Add fold</button><select><option value="valley">valley (dashed)</option><option value="mountain">mountain (dash-dot)</option></select><button data-m="drop">Remove fold</button><button data-m="move">Move corner</button><button data-m="number">Numbers</button></div>
+      <div class="tools"><button data-m="add">Add fold</button><select><option value="valley">valley (dashed)</option><option value="mountain">mountain (dash-dot)</option></select><button data-m="drop">Remove fold</button><button data-m="move">Move corner</button><button data-m="point">Remove corner</button><button data-m="number">Numbers</button>${reviewServer ? '<button data-a="show-3d">Show in 3D</button>' : ""}</div>
       ${pending.length ? `<div class="tools"><button data-a="twin">Add the twin's ${pending.length} fold${pending.length > 1 ? "s" : ""}</button></div>` : ""}
       <div class="meta how"></div>
       <label class="meta">Note for edits the page cannot make<textarea rows="3" style="width:100%;font:inherit">${f.note.replace(/</g, "&lt;")}</textarea></label>
@@ -388,12 +730,13 @@ function pieceCard(q, list, rerender) {
   const HOW = {add: "Click the two ends of the missing fold; ends snap to blue corners (Shift places freely).",
     drop: "Click a fold to remove it, or a purple one to take it back.",
     move: "Drag a blue corner to where the printed cut really turns; its folds follow.",
+    point: "Click a blue corner to remove it; its two outline edges join and attached folds move onto the new edge.",
     number: "Click a circled number to remove it (not a number), or an empty spot to add a number the reader missed."};
   const setMode = (m, redraw) => { mode = m; if (redraw) { changed(); return; }
     el.querySelectorAll("[data-m]").forEach(b => b.classList.toggle("on", b.dataset.m === m)); how.textContent = HOW[m]; };
   setMode(mode);
   el.querySelectorAll("[data-m]").forEach(b => b.addEventListener("click", () => setMode(b.dataset.m, true)));
-  const points = [...outline, ...folds.flatMap(g => [[g[0], g[1]], [g[2], g[3]]]), ...f.add.flatMap(g => [g.a, g.b])];
+  const points = [...activeOutline, ...folds.flatMap(g => [[g[0], g[1]], [g[2], g[3]]]), ...f.add.flatMap(g => [g.a, g.b])];
   const toMM = e => { const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse()); return [p.x, p.y]; };
   const mmPerPx = () => side / svg.getBoundingClientRect().width;
   const snap = (p, e) => { let best = e.shiftKey ? 0 : SNAP_PX * mmPerPx(), hit = p;
@@ -406,7 +749,7 @@ function pieceCard(q, list, rerender) {
     if (mode !== "move") return;
     const p = toMM(e);
     const i = outline.map((c, i) => ({i, d: Math.hypot(c[0] - p[0], c[1] - p[1])})).sort((u, v) => u.d - v.d)[0];
-    if (!i || i.d > SNAP_PX * 1.5 * mmPerPx()) return;
+    if (!i || i.d > SNAP_PX * 1.5 * mmPerPx() || f.pointDrop.some(p => Math.hypot(p[0] - outline[i.i][0], p[1] - outline[i.i][1]) < 0.5)) return;
     dragging = {i: i.i, from: t.outline[i.i], dot: svg.querySelector(`.corner[data-i="${i.i}"]`)};
     svg.setPointerCapture(e.pointerId); e.preventDefault();
   });
@@ -415,7 +758,9 @@ function pieceCard(q, list, rerender) {
     const p = toMM(e);
     dragging.to = round(p);
     dragging.dot.setAttribute("cx", p[0]); dragging.dot.setAttribute("cy", p[1]);
-    const shown = outline.slice(); shown[dragging.i] = p;
+    const shown = activeOutline.slice();
+    const activeIndex = activeOutline.findIndex(c => c === outline[dragging.i]);
+    if (activeIndex >= 0) shown[activeIndex] = p;
     svg.querySelector(".trace").setAttribute("points", shown.map(c => c.join(",")).join(" "));
   });
   svg.addEventListener("pointerup", () => {
@@ -429,6 +774,12 @@ function pieceCard(q, list, rerender) {
   svg.addEventListener("click", e => {
     if (mode === "move") return;
     const p = toMM(e);
+    if (mode === "point") {
+      const corner = e.target.closest(".corner"); if (!corner) return;
+      if (activeOutline.length <= 3) { how.textContent = "A piece needs at least three outline corners."; return; }
+      const i = +corner.dataset.i, point = outline[i];
+      f.pointDrop.push(point.slice()); f.log.push("pointDrop"); changed(); return;
+    }
     if (mode === "number") {
       const label = e.target.closest(".label"), added = e.target.closest(".newnum");
       if (added) { f.numbers.splice(+added.dataset.n, 1); changed(); return; }
@@ -466,6 +817,9 @@ function pieceCard(q, list, rerender) {
     if (picked.length) { picked = []; clicks.innerHTML = ""; setMode(mode); return; }
     const last = f.log.pop();
     if (last) f[last].pop(); changed(); });
+  el.querySelector("[data-a=show-3d]")?.addEventListener("click", () => {
+    if (threePanel.hidden) document.getElementById("three-toggle").click(); showPieceIn3d(q.piece);
+  });
   el.querySelector("[data-a=twin]")?.addEventListener("click", () => {
     for (const g of pending) { f.add.push({kind: g.kind, a: g.a, b: g.b}); f.log.push("add"); } changed(); });
 }
@@ -488,6 +842,7 @@ function labelFilters() {
 }
 document.querySelectorAll("header [data-f]").forEach(b => b.addEventListener("click", () => {
   filter = b.dataset.f;
+  cardAt = 0;
   document.querySelectorAll("header [data-f]").forEach(x => x.classList.toggle("on", x === b));
   render();
 }));
@@ -507,11 +862,19 @@ async function save(quiet) {
   const reviewed = ["piece,action,kind,ax_mm,ay_mm,bx_mm,by_mm,note"];
   for (const [piece, f] of Object.entries(pieceFixes)) {
     for (const m of f.move || []) reviewed.push([piece, "move", "", ...m.a, ...m.b, ""].join(","));
+    for (const p of f.pointDrop || []) reviewed.push([piece, "drop-point", "", ...p, "", "", ""].join(","));
     for (const n of f.numbers || []) reviewed.push([piece, "number", n.number, n.x, n.y, "", "", ""].join(","));
     if (f.note) reviewed.push([piece, "note", "", "", "", "", "", csvField(f.note)].join(","));
     for (const l of f.add) reviewed.push([piece, "add", l.kind, ...l.a, ...l.b, ""].join(","));
     for (const l of f.drop) reviewed.push([piece, "drop", "", ...movedIn(f, l.a), ...movedIn(f, l.b), ""].join(","));
     if (f.ok) reviewed.push([piece, "ok", "", "", "", "", "", ""].join(","));
+  }
+  for (const item of reviewedNumbers) {
+    const split = item.lastIndexOf("@");
+    if (split > 0) {
+      const [x, y] = item.slice(split + 1).split(",");
+      reviewed.push([item.slice(0, split), "number-ok", "", x, y, "", "", ""].join(","));
+    }
   }
   const files = [["number-corrections.csv", rows], ["number-lines.csv", drawn], ["piece-edits.csv", reviewed]];
   const download = (name, text) => {
@@ -519,6 +882,12 @@ async function save(quiet) {
     a.href = URL.createObjectURL(new Blob([text], {type: "text/csv"}));
     a.download = name; document.body.appendChild(a); a.click(); a.remove();
   };
+  if (reviewServer) {
+    try { const result = await saveToServer(files.map(([name, list]) => [name, list.join("\n") + "\n"]));
+      document.getElementById("server-status").textContent = result.message;
+      return result;
+    } catch (e) { document.getElementById("server-status").className = "error"; document.getElementById("server-status").textContent = `Save or rebuild failed: ${e.message}`; if (quiet) throw e; return false; }
+  }
   if (quiet && !folder) return;
   let where = folder ? `the ${folder.name} folder` : "your Downloads folder";
   for (const [name, list] of files) {
@@ -540,6 +909,14 @@ async function save(quiet) {
   if (quiet) return;
   document.getElementById("count").textContent += " " + note;
   alert(note);
+}
+async function saveToServer(files) {
+  const model = new URLSearchParams(location.search).get("model");
+  const response = await fetch("/api/save", {method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({model, files: Object.fromEntries(files)})});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Request failed");
+  return result;
 }
 document.getElementById("save").addEventListener("click", () => save(false));
 </script></body></html>

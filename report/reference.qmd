@@ -72,3 +72,35 @@ materials:                 # one entry per cardstock colour
 | `partner_piece`, `partner_side`, `partner_length_mm` | The other place the same number is printed |
 | `length_diff_mm` | Difference between the two edge lengths |
 | `status` | `ok`, `length mismatch`, `both tabs`, `no tab`, `unpaired`, `line not found`, `printed N times` |
+
+## 3D fold-up
+
+`make -f fold3d.mk` (or `python -m src.lowpoly_pdf_to_svg.fold3d --config …`) folds the traced
+pieces into `data/<project>/fold3d.obj` and its tables. A cold build of a large model takes about
+half an hour, so later runs reuse earlier work.
+
+| Option | Default | Description |
+|---|---|---|
+| `--gape` | `3.0` | Let go of a glue whose ends stay this far apart (mm) |
+| `--anneal` | `5` | Cycles of hard then easy fold pull after the build |
+| `--cold` | off | Ignore saved poses and caches and place every piece from scratch (`COLD=1` in Make) |
+
+### Warm start and component cache
+
+- **Same-cardstock components.** Pieces joined by numbered glue edges of the same cardstock form
+  a component, which is folded on its own as a subassembly. Glues between cardstocks are then
+  closed by moving whole components, with local refinement around the joins. A join that cannot
+  close stays open and is reported in `fold3d-glue.csv`. It is never forced.
+- **`fold3d-components.json`** caches each component's pose. Its key covers the component's
+  traced geometry, tab marks and internal glues, so an edit only rebuilds the components it
+  touches.
+- **`fold3d-state.npz`** is a pose checkpoint for the whole model. The first warm run falls back
+  to the previous `fold3d.json`. Vertices are matched by piece id and flat position, rounded to
+  0.01 mm. When at least 70 % match, their 3D positions are reused, and new or moved vertices are
+  placed by aligning their piece to its unchanged corners. The piece-by-piece placement is then
+  skipped, but the whole assembly is still optimised.
+- A missing, unreadable or poorly matching cache falls back to a cold build. Both caches are
+  written only after a successful run, and Git ignores them.
+- **`fold3d-tab-overrides.json`** (optional, hand-kept) maps a face `piece-PP-NN/k` to `true`
+  (glue tab) or `false` (body) where the automatic tab marking got it wrong. The viewer keeps
+  the same overrides while you edit.

@@ -9,6 +9,8 @@
 #                              pattern, click a face in either to find it in the other (local only)
 #   make -f fold3d.mk install  extra Python dependencies (scipy, shapely, matplotlib)
 # Needs data/<project>/<project>.svg from a full `make` first.
+# Checkpoints after piece placement and reuses the pose on retries or geometry edits;
+# pass COLD=1 for a full rebuild.
 
 PYTHON  ?= python3
 CONFIG  ?= data/example/example.yaml
@@ -16,16 +18,18 @@ PROJECT ?= $(basename $(notdir $(CONFIG)))
 OUT     ?= $(patsubst %/,%,$(dir $(CONFIG)))
 
 PORT    ?= 8000
+VIEW_ROOT ?= $(abspath $(OUT)/../..)
+VIEWER_PATH ?= $(if $(wildcard $(VIEW_ROOT)/app/fold3d-viewer.html),app/fold3d-viewer.html,tools/lowpoly-pdf-to-svg/app/fold3d-viewer.html)
 
 .PHONY: fold3d install view
 fold3d: $(OUT)/fold3d.obj
 
 $(OUT)/fold3d.obj: $(OUT)/$(PROJECT).svg src/lowpoly_pdf_to_svg/fold3d.py
-	$(PYTHON) -m src.lowpoly_pdf_to_svg.fold3d --config $(CONFIG)
+	$(PYTHON) -m src.lowpoly_pdf_to_svg.fold3d --config $(CONFIG) $(if $(filter 1,$(COLD)),--cold,)
 
 install:
 	$(PYTHON) -m pip install -r requirements-fold3d.txt
 
 view:   # no rebuild: the fold takes about half an hour, run `make -f fold3d.mk` first
-	@echo "Open http://localhost:$(PORT)/app/fold3d-viewer.html?json=../$(OUT)/fold3d.json&svg=../$(OUT)/$(PROJECT).svg"
-	$(PYTHON) -m http.server $(PORT) --bind 127.0.0.1
+	@echo "Open http://127.0.0.1:$(PORT)/$(VIEWER_PATH)?json=/data/$(PROJECT)/fold3d.json&svg=/data/$(PROJECT)/$(PROJECT).svg"
+	$(PYTHON) -m http.server $(PORT) --bind 127.0.0.1 --directory "$(VIEW_ROOT)"
