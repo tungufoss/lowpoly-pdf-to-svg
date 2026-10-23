@@ -85,10 +85,33 @@ half an hour, so later runs reuse earlier work.
 | `--anneal` | `5` | Cycles of hard then easy fold pull after the build |
 | `--cold` | off | Ignore saved poses and caches and place every piece from scratch (`COLD=1` in Make) |
 
+### Modular glue plan
+
+The glue is planned in three stages, and `fold3d.py` folds in the same order:
+
+1. **By cardstock.** Pieces are split by their material.
+2. **Glue units.** Within one cardstock, pieces tied by a numbered glue (a tab onto a face)
+   form one glue unit. A piece with no glue to another piece of its colour is a unit of its own.
+   Each unit is folded on its own.
+3. **Joins.** The glues between units of different cardstocks close last, by moving whole units.
+
+`make -f fold3d.mk plan` writes the plan in a few seconds from `<project>.svg`, without folding;
+when a `fold3d-glue.csv` from an earlier fold is there, its statuses fill the `closes` columns.
+A full fold writes the same files.
+
+| File | One row per | Columns |
+|---|---|---|
+| `fold3d-units.csv` | glue unit | `unit` (`<cardstock>-NN`, largest first), `material`, `pieces`, `glues` inside the unit, `closes`, `piece_ids` |
+| `fold3d-joins.csv` | pair of units with glues between them | `unit_a`, `unit_b`, `materials`, `glues`, `closes`, `numbers` (PDF numbers) |
+
+`fold3d-glue.csv` has a `stage` column: `unit` for a glue inside one unit, `join` for one between
+units. Next steps, folding only changed units and joining on
+demand, are tracked in issue #37.
+
 ### Warm start and component cache
 
-- **Same-cardstock components.** Pieces joined by numbered glue edges of the same cardstock form
-  a component, which is folded on its own as a subassembly. Glues between cardstocks are then
+- **Same-cardstock components.** The glue units of the plan above, each folded on its own as a
+  subassembly. Glues between cardstocks are then
   closed by moving whole components, with local refinement around the joins. A join that cannot
   close stays open and is reported in `fold3d-glue.csv`. It is never forced.
 - **`fold3d-components.json`** caches each component's pose. Its key covers the component's

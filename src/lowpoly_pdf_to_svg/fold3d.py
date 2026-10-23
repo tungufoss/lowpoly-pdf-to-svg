@@ -28,6 +28,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .glueplan import GluePlan
+
 SVG = "{http://www.w3.org/2000/svg}"
 INKSCAPE = "{http://www.inkscape.org/namespaces/inkscape}"
 LABEL_REACH_MM = 3.0     # as detect.py: a number further than this from every line marks none
@@ -883,6 +885,34 @@ class CornerAdjuster:
         return moves, inspect
 
 
+def read_pieces(svg: Path) -> list[FlatPiece]:
+    """The traced pieces split into faces, numbers on their edges, tabs marked, with the
+    hand-kept fold3d-tab-overrides.json applied."""
+    pieces = PatternReader().read(svg)
+    overrides_path = svg.with_name("fold3d-tab-overrides.json")
+    try:
+        tab_overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        tab_overrides = {}
+    for piece in pieces:
+        piece.split_faces()
+        piece.mark_labels()
+        piece.mark_tabs()
+        edge_use = collections.Counter(frozenset(edge) for face in piece.faces for edge in piece.face_edges(face))
+        for index, face in enumerate(piece.faces):
+            override = tab_overrides.get(f"{piece.id}/{index}")
+            if isinstance(override, bool):
+                face.tab = override
+                shared_edges = {frozenset(edge) for edge in piece.face_edges(face)
+                                if edge_use[frozenset(edge)] == 2}
+                labels = [label for label in piece.labels if label.edge and frozenset(label.edge) in shared_edges]
+                if labels:
+                    centre = np.mean([piece.points[v] for v in face.vertices], axis=0)
+                    label = min(labels, key=lambda item: np.linalg.norm(item.centre - centre))
+                    label.tab = override
+    return pieces
+
+
 class Reconstruction:
     """Pattern SVG in; folded model, per-glue closure table and preview out."""
 
@@ -903,28 +933,7 @@ class Reconstruction:
             print(text, flush=True)
 
     def run(self) -> None:
-        self.pieces = PatternReader().read(self.svg)
-        overrides_path = self.svg.with_name("fold3d-tab-overrides.json")
-        try:
-            tab_overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            tab_overrides = {}
-        for piece in self.pieces:
-            piece.split_faces()
-            piece.mark_labels()
-            piece.mark_tabs()
-            edge_use = collections.Counter(frozenset(edge) for face in piece.faces for edge in piece.face_edges(face))
-            for index, face in enumerate(piece.faces):
-                override = tab_overrides.get(f"{piece.id}/{index}")
-                if isinstance(override, bool):
-                    face.tab = override
-                    shared_edges = {frozenset(edge) for edge in piece.face_edges(face)
-                                    if edge_use[frozenset(edge)] == 2}
-                    labels = [label for label in piece.labels if label.edge and frozenset(label.edge) in shared_edges]
-                    if labels:
-                        centre = np.mean([piece.points[v] for v in face.vertices], axis=0)
-                        label = min(labels, key=lambda item: np.linalg.norm(item.centre - centre))
-                        label.tab = override
+        self.pieces = read_pieces(self.svg)
         self.asm = Assembly(self.pieces)
         glues, status = GlueFinder(self.pieces).find()
         self.log(f"{len(self.pieces)} pieces, {len(self.asm.faces)} faces; numbers: "
@@ -980,35 +989,14 @@ class Reconstruction:
         return glue.number, glue.piece, glue.a, glue.b, glue.other, glue.c, glue.d
 
     def _same_material_components(self, glues: list[Glue]) -> list[dict]:
-        """Partition the piece graph by same-cardstock numbered glue connections."""
-        piece_ids = sorted({piece for piece, _ in self.asm.index})
-        parent = {piece: piece for piece in piece_ids}
-
-        def find(piece):
-            while parent[piece] != piece:
-                parent[piece] = parent[parent[piece]]
-                piece = parent[piece]
-            return piece
-
-        def union(a, b):
-            a, b = find(a), find(b)
-            if a != b:
-                parent[max(a, b)] = min(a, b)
-
-        for glue in glues:
-            if glue.piece not in parent or glue.other not in parent:
-                continue
-            if self.asm.pieces[glue.piece].material == self.asm.pieces[glue.other].material:
-                union(glue.piece, glue.other)
-
-        members = collections.defaultdict(list)
-        for piece in piece_ids:
-            members[find(piece)].append(piece)
+        """The glue units of GluePlan: same-cardstock pieces tied by numbered glues."""
+        self.plan = GluePlan({piece: self.asm.pieces[piece].material for piece, _ in self.asm.index}, glues)
         components = []
-        for pieces in sorted(members.values(), key=lambda row: (self.asm.pieces[row[0]].material, row)):
+        for unit in self.plan.units:
+            pieces = set(unit.pieces)
             vertices = sorted(v for v, (piece, _) in self.asm.key.items() if piece in pieces)
-            components.append({"id": ",".join(pieces), "material": self.asm.pieces[pieces[0]].material,
-                               "pieces": pieces, "vertices": vertices})
+            components.append({"id": ",".join(unit.pieces), "unit": unit.id, "material": unit.material,
+                               "pieces": unit.pieces, "vertices": vertices})
         return components
 
     def _component_signature(self, component: dict, glues: list[Glue]) -> str:
@@ -1333,7 +1321,8 @@ class Reconstruction:
                 status = "proposed, closes" if proposed else "closes"
             rows.append({"number": g.number, "piece": g.piece, "tab_piece": g.other, "length_mm": f"{g.length:.1f}",
                          "length_diff_mm": f"{g.length_diff:.2f}", "gap_mm": f"{gaps[k]:.1f}",
-                         "look_alike": _look_alike(g.number) if proposed else "", "status": status})
+                         "look_alike": _look_alike(g.number) if proposed else "", "status": status,
+                         "stage": self.plan.stage(g.piece, g.other)})
         return sorted(rows, key=lambda r: (r["status"], -float(r["gap_mm"])))
 
     def write(self, out: Path, project: str) -> None:
@@ -1341,10 +1330,10 @@ class Reconstruction:
         x = self._posed()
         self._obj(out / "fold3d.obj", x)
         rows = self.glue_rows()
-        with (out / "fold3d-glue.csv").open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
+        self.plan.write(out, {(r["number"], r["piece"], r["tab_piece"]): r["status"] for r in rows})
+        self.log(self.plan.summary())
+        self._csv(out / "fold3d-glue.csv", rows, ["number", "piece", "tab_piece", "length_mm", "length_diff_mm",
+                                                  "gap_mm", "look_alike", "status", "stage"])
         self._preview(out / "fold3d.png", x)
         self._viewer_json(out / "fold3d.json", x, rows)
         moves, inspect = CornerAdjuster(self).rows()
@@ -1512,7 +1501,7 @@ def main() -> int:
     run = Reconstruction(svg, gape_mm=args.gape, reference=reference, anneal=args.anneal, cold=args.cold)
     run.run()
     run.write(out, project)
-    print(f"Wrote {out / 'fold3d.obj'}, fold3d-glue.csv, fold3d-baseline.csv, fold3d-moves.csv, fold3d-inspect.csv and fold3d.png")
+    print(f"Wrote {out / 'fold3d.obj'}, fold3d-glue.csv, fold3d-units.csv, fold3d-joins.csv, fold3d-baseline.csv, fold3d-moves.csv, fold3d-inspect.csv and fold3d.png")
     return 0
 
 
