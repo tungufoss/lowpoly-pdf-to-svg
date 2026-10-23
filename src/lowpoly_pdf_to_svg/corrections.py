@@ -200,8 +200,9 @@ class PieceFixes:
                 if not corners:
                     missed.append(row)
                     continue
-                moved = [tuple(piece.outline[corners[0]])]
-                piece.outline[corners[0]] = b
+                corner = min(corners, key=lambda i: math.dist(piece.outline[i], a))
+                moved = [tuple(piece.outline[corner])]
+                piece.outline[corner] = b
                 for fold in piece.folds:
                     moved += [tuple(e) for e in (fold.a, fold.b) if near(e, a)]
                     fold.a, fold.b = (b if near(fold.a, a) else fold.a), (b if near(fold.b, a) else fold.b)

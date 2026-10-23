@@ -24,6 +24,8 @@ from .model import Fold, FoldKind, Label, PageLayout, Piece, Point
 from .render import PageImage
 from .skeleton import paths_from_skeleton, simplify, thin
 
+DASH_DOT_SHARE = 0.25   # share of long dash runs from which a fold reads as dash-dot
+
 
 @dataclass
 class DetectorSettings:
@@ -593,8 +595,15 @@ class PageDetector:
         near = [abs(cv2.pointPolygonTest(polygon, (float(x), float(y)), True)) <= distance for x, y in samples]
         return sum(near) > len(near) / 2
 
-    def _fold_kind(self, dashes: np.ndarray, a: Point, b: Point, px: float) -> FoldKind:
-        """Dash-dot lines contain short 'dot' runs between the dashes."""
+    def fold_evidence(self, page: PageImage, a: Point, b: Point) -> float | None:
+        """How clearly the printed fold between a and b (page px) reads as dash-dot: the share of
+        long dash runs less the dash-dot threshold (above 0: dash-dot, below: dashed), or None
+        when too little dash ink lies along it."""
+        if self.fold_kind(page, a, b) is None:
+            return None
+        return self._dash_dot_share(self._dash, a, b, 1.0 / page.mm_per_px) - DASH_DOT_SHARE
+
+    def _dash_dot_share(self, dashes: np.ndarray, a: Point, b: Point, px: float) -> float:
         tolerant = cv2.dilate(dashes, _kernel(3))
         length = math.dist(a, b)
         steps = max(2, int(length * 2))
@@ -606,8 +615,14 @@ class PageDetector:
         interior = runs[1:-1] if len(runs) > 2 else runs  # end runs are often clipped
         # At 180 dpi a dash measures ~11 px; a dash-dot line alternates
         # ~19 px dashes with ~7 px runs where the dot merges with its neighbour.
-        long = int((interior >= 15 * px / 7.09).sum())
-        return self.folds["dash_dot" if long >= max(1, 0.25 * len(interior)) else "dashed"]
+        if not len(interior):
+            return 0.0
+        return float((interior >= 15 * px / 7.09).sum()) / len(interior)
+
+    def _fold_kind(self, dashes: np.ndarray, a: Point, b: Point, px: float) -> FoldKind:
+        """Dash-dot lines contain short 'dot' runs between the dashes."""
+        share = self._dash_dot_share(dashes, a, b, px)
+        return self.folds["dash_dot" if share > 0 and share >= DASH_DOT_SHARE else "dashed"]
 
     def _span_piece(self, folds: list[Fold], polygon: np.ndarray, support: np.ndarray, px: float) -> list[Fold]:
         """Stretch every fold into one straight line from cut edge to cut edge.
