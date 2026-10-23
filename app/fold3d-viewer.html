@@ -69,7 +69,9 @@
   .hint { position: absolute; left: 10px; bottom: 8px; font-size: 12px; color: var(--muted);
     background: color-mix(in srgb, var(--panel) 80%, transparent); padding: 2px 6px; border-radius: 4px;
     pointer-events: none; }
-  #three .hint { left: 122px; right: 8px; font-size: 11px; }
+  /* A fixed light-grey backdrop in both themes, so black cardstock stays visible in dark mode. */
+  #three { background: #d4d8de; }
+  #three .hint { left: 122px; right: 8px; font-size: 11px; color: #4d4c48; background: #d4d8decc; }
   #pattern .hint { color: #6b6a66; background: #e8efffcc; }
   footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; min-height: 64px;
     max-height: 30vh; overflow: auto; }
