@@ -77,18 +77,43 @@ materials:                 # one entry per cardstock colour
 
 `make -f fold3d.mk` (or `python -m src.lowpoly_pdf_to_svg.fold3d --config …`) folds the traced
 pieces into `data/<project>/fold3d.obj` and its tables. A cold build of a large model takes about
-half an hour, so later runs reuse earlier work.
+half an hour, so later runs reuse earlier work. On Bowser (4 cores), a warm run that moves
+every unit takes about 4.5 minutes, and a run after a one-unit edit takes about 5 seconds.
 
 | Option | Default | Description |
 |---|---|---|
 | `--gape` | `3.0` | Let go of a glue whose ends stay this far apart (mm) |
 | `--anneal` | `5` | Cycles of hard then easy fold pull after the build |
 | `--cold` | off | Ignore saved poses and caches and place every piece from scratch (`COLD=1` in Make) |
+| `--rejoin` | off | Let the join move every unit, not only the units changed since the saved pose (`REJOIN=1` in Make) |
+
+### Modular glue plan
+
+The glue is planned in three stages, and `fold3d.py` folds in the same order:
+
+1. **By cardstock.** Pieces are split by their material.
+2. **Glue units.** Within one cardstock, pieces tied by a numbered glue (a tab onto a face)
+   form one glue unit. A piece with no glue to another piece of its colour is a unit of its own.
+   Each unit is folded on its own.
+3. **Joins.** The glues between units of different cardstocks close last, by moving whole units.
+
+`make -f fold3d.mk plan` writes the plan in a few seconds from `<project>.svg`, without folding;
+when a `fold3d-glue.csv` from an earlier fold is there, its statuses fill the `closes` columns.
+A full fold writes the same files.
+
+| File | One row per | Columns |
+|---|---|---|
+| `fold3d-units.csv` | glue unit | `unit` (`<cardstock>-NN`, largest first), `material`, `pieces`, `glues` inside the unit, `closes`, `piece_ids` |
+| `fold3d-joins.csv` | pair of units with glues between them | `unit_a`, `unit_b`, `materials`, `glues`, `closes`, `numbers` (PDF numbers) |
+
+`fold3d-glue.csv` has a `stage` column: `unit` for a glue inside one unit, `join` for one between
+units. Next steps, folding only changed units and joining on
+demand, are tracked in issue #37.
 
 ### Warm start and component cache
 
-- **Same-cardstock components.** Pieces joined by numbered glue edges of the same cardstock form
-  a component, which is folded on its own as a subassembly. Glues between cardstocks are then
+- **Same-cardstock components.** The glue units of the plan above, each folded on its own as a
+  subassembly. Glues between cardstocks are then
   closed by moving whole components, with local refinement around the joins. A join that cannot
   close stays open and is reported in `fold3d-glue.csv`. It is never forced.
 - **`fold3d-components.json`** caches each component's pose. Its key covers the component's
@@ -98,7 +123,16 @@ half an hour, so later runs reuse earlier work.
   to the previous `fold3d.json`. Vertices are matched by piece id and flat position, rounded to
   0.01 mm. When at least 70 % match, their 3D positions are reused, and new or moved vertices are
   placed by aligning their piece to its unchanged corners. The piece-by-piece placement is then
-  skipped, but the whole assembly is still optimised.
+  skipped.
+- **Only changed units move in the join.** The checkpoint also records the glues between units.
+  On a warm run, the join moves only the units that were rebuilt, plus the units whose glues to
+  other units changed. Every other unit keeps its saved pose. With nothing changed, the join
+  does no work. `--rejoin` moves every unit again, and so does a first run from `fold3d.json`,
+  which has no join record.
+- **The join solve is sparse.** Each join glue ties only two units, so finite differences are
+  grouped by unit and the solve reads only the corners at the joins. The fold-pull cycles stop
+  early once a cycle changes neither the wrong-fold count nor the closed-glue count.
+- Log lines start with the elapsed time (`[mm:ss]`).
 - A missing, unreadable or poorly matching cache falls back to a cold build. Both caches are
   written only after a successful run, and Git ignores them.
 - **`fold3d-tab-overrides.json`** (optional, hand-kept) maps a face `piece-PP-NN/k` to `true`

@@ -15,6 +15,7 @@ Each stage is a class in `src/lowpoly_pdf_to_svg/`:
 | Edge pairs | `edges.py` | Links each number to the line it marks (a plain cut edge, or the fold of a glue tab) and pairs the two copies. Writes `edge-numbers.csv` and the summary `README.md` (the model folder's status page): a good pair is one tab and one plain edge of the same length. |
 | Model | `model.py` | `Piece`, `Fold`, `Label` and `PageLayout`, in page pixels. |
 | Write | `svg.py` | One Inkscape SVG for the whole project: document size in inches for Cricut Design Space, drawing coordinates in millimetres. |
+| 3D fold | `fold3d.py`, `glueplan.py` | Folds the pattern back into the 3D model with `make -f fold3d.mk`. Glue is modular: by cardstock, then glue units of same-colour pieces tied by glues, then the joins between colours; `make -f fold3d.mk plan` lists them in seconds. See [3D fold-up](reference.qmd#d-fold-up). |
 | Export | `export.py` | Last step, run with `make export` once review and fixes are done. Writes `<project>-export.svg` and the label key `<project>-labels.csv`. |
 
 ## Reviewing in Inkscape

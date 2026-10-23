@@ -22,11 +22,14 @@ import json
 import math
 import re
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+from .glueplan import GluePlan
 
 SVG = "{http://www.w3.org/2000/svg}"
 INKSCAPE = "{http://www.inkscape.org/namespaces/inkscape}"
@@ -440,22 +443,11 @@ class FoldSolver:
         return np.concatenate(parts) if parts else np.empty(0)
 
     def _normals(self, x: np.ndarray, indices: np.ndarray | None = None):
-        hinge = self.hinge if indices is None else self.hinge[indices]
-        a, b, p, a2, b2, q, _ = hinge.T
-        nl = np.cross(x[b] - x[a], x[p] - x[a])
-        nr = np.cross(x[a2] - x[b2], x[q] - x[b2])
-        nl /= np.linalg.norm(nl, axis=1, keepdims=True) + 1e-9
-        nr /= np.linalg.norm(nr, axis=1, keepdims=True) + 1e-9
-        return nl, nr
+        return _hinge_normals(x, self.hinge if indices is None else self.hinge[indices])
 
     def _signs(self, x: np.ndarray, indices: np.ndarray | None = None) -> np.ndarray:
         """How far each fold bends the wrong way (0 when right or when its way is unknown)."""
-        hinge = self.hinge if indices is None else self.hinge[indices]
-        a, b, p, a2, b2, q, sign = hinge.T
-        nl, _ = self._normals(x, indices)
-        r = x[q] - x[a]
-        s = np.einsum("ij,ij->i", nl, r) / (np.linalg.norm(r, axis=1) + 1e-9)
-        return np.maximum(0.0, -sign * s)
+        return _hinge_signs(x, self.hinge if indices is None else self.hinge[indices])
 
     def bends(self, x: np.ndarray) -> np.ndarray:
         nl, nr = self._normals(x)
@@ -514,6 +506,24 @@ class FoldSolver:
         glued = self.hinge_glue >= 0
         open_or_unmapped[glued] = ~self.dropped[self.hinge_glue[glued]]
         return (self._signs(x) > 0.05) & open_or_unmapped
+
+
+def _hinge_normals(x: np.ndarray, hinge: np.ndarray):
+    """Unit normals of the two faces at each hinge row (a, b, p, a2, b2, q, sign)."""
+    a, b, p, a2, b2, q, _ = hinge.T
+    nl = np.cross(x[b] - x[a], x[p] - x[a])
+    nr = np.cross(x[a2] - x[b2], x[q] - x[b2])
+    nl /= np.linalg.norm(nl, axis=1, keepdims=True) + 1e-9
+    nr /= np.linalg.norm(nr, axis=1, keepdims=True) + 1e-9
+    return nl, nr
+
+
+def _hinge_signs(x: np.ndarray, hinge: np.ndarray) -> np.ndarray:
+    a, q, sign = hinge[:, 0], hinge[:, 5], hinge[:, 6]
+    nl, _ = _hinge_normals(x, hinge)
+    r = x[q] - x[a]
+    s = np.einsum("ij,ij->i", nl, r) / (np.linalg.norm(r, axis=1) + 1e-9)
+    return np.maximum(0.0, -sign * s)
 
 
 # -- growing the model piece by piece ---------------------------------------------
@@ -883,15 +893,47 @@ class CornerAdjuster:
         return moves, inspect
 
 
+def read_pieces(svg: Path) -> list[FlatPiece]:
+    """The traced pieces split into faces, numbers on their edges, tabs marked, with the
+    hand-kept fold3d-tab-overrides.json applied."""
+    pieces = PatternReader().read(svg)
+    overrides_path = svg.with_name("fold3d-tab-overrides.json")
+    try:
+        tab_overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        tab_overrides = {}
+    for piece in pieces:
+        piece.split_faces()
+        piece.mark_labels()
+        piece.mark_tabs()
+        edge_use = collections.Counter(frozenset(edge) for face in piece.faces for edge in piece.face_edges(face))
+        for index, face in enumerate(piece.faces):
+            override = tab_overrides.get(f"{piece.id}/{index}")
+            if isinstance(override, bool):
+                face.tab = override
+                shared_edges = {frozenset(edge) for edge in piece.face_edges(face)
+                                if edge_use[frozenset(edge)] == 2}
+                labels = [label for label in piece.labels if label.edge and frozenset(label.edge) in shared_edges]
+                if labels:
+                    centre = np.mean([piece.points[v] for v in face.vertices], axis=0)
+                    label = min(labels, key=lambda item: np.linalg.norm(item.centre - centre))
+                    label.tab = override
+    return pieces
+
+
 class Reconstruction:
     """Pattern SVG in; folded model, per-glue closure table and preview out."""
 
     def __init__(self, svg: Path, gape_mm: float = 3.0, propose_rounds: int = 3, verbose: bool = True,
-                 reference: dict | None = None, anneal: int = 5, cold: bool = False):
+                 reference: dict | None = None, anneal: int = 5, cold: bool = False, rejoin: bool = False):
         self.svg = svg
         self.state_path = svg.with_name("fold3d-state.npz")
         self.component_state_path = svg.with_name("fold3d-components.json")
         self.cold = cold
+        self.rejoin = rejoin               # move every unit in the join, not only changed ones
+        self.movable: set[int] | None = None   # units the join may move; None: all
+        self.saved_joins: set[tuple] | None = None
+        self.started = time.monotonic()
         self.reference = reference or {}   # finished model's counts (YAML `reference:`)
         self.gape = gape_mm
         self.rounds = propose_rounds
@@ -900,31 +942,11 @@ class Reconstruction:
 
     def log(self, text: str) -> None:
         if self.verbose:
-            print(text, flush=True)
+            minutes, seconds = divmod(int(time.monotonic() - self.started), 60)
+            print(f"[{minutes:02d}:{seconds:02d}] {text}", flush=True)
 
     def run(self) -> None:
-        self.pieces = PatternReader().read(self.svg)
-        overrides_path = self.svg.with_name("fold3d-tab-overrides.json")
-        try:
-            tab_overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            tab_overrides = {}
-        for piece in self.pieces:
-            piece.split_faces()
-            piece.mark_labels()
-            piece.mark_tabs()
-            edge_use = collections.Counter(frozenset(edge) for face in piece.faces for edge in piece.face_edges(face))
-            for index, face in enumerate(piece.faces):
-                override = tab_overrides.get(f"{piece.id}/{index}")
-                if isinstance(override, bool):
-                    face.tab = override
-                    shared_edges = {frozenset(edge) for edge in piece.face_edges(face)
-                                    if edge_use[frozenset(edge)] == 2}
-                    labels = [label for label in piece.labels if label.edge and frozenset(label.edge) in shared_edges]
-                    if labels:
-                        centre = np.mean([piece.points[v] for v in face.vertices], axis=0)
-                        label = min(labels, key=lambda item: np.linalg.norm(item.centre - centre))
-                        label.tab = override
+        self.pieces = read_pieces(self.svg)
         self.asm = Assembly(self.pieces)
         glues, status = GlueFinder(self.pieces).find()
         self.log(f"{len(self.pieces)} pieces, {len(self.asm.faces)} faces; numbers: "
@@ -980,35 +1002,14 @@ class Reconstruction:
         return glue.number, glue.piece, glue.a, glue.b, glue.other, glue.c, glue.d
 
     def _same_material_components(self, glues: list[Glue]) -> list[dict]:
-        """Partition the piece graph by same-cardstock numbered glue connections."""
-        piece_ids = sorted({piece for piece, _ in self.asm.index})
-        parent = {piece: piece for piece in piece_ids}
-
-        def find(piece):
-            while parent[piece] != piece:
-                parent[piece] = parent[parent[piece]]
-                piece = parent[piece]
-            return piece
-
-        def union(a, b):
-            a, b = find(a), find(b)
-            if a != b:
-                parent[max(a, b)] = min(a, b)
-
-        for glue in glues:
-            if glue.piece not in parent or glue.other not in parent:
-                continue
-            if self.asm.pieces[glue.piece].material == self.asm.pieces[glue.other].material:
-                union(glue.piece, glue.other)
-
-        members = collections.defaultdict(list)
-        for piece in piece_ids:
-            members[find(piece)].append(piece)
+        """The glue units of GluePlan: same-cardstock pieces tied by numbered glues."""
+        self.plan = GluePlan({piece: self.asm.pieces[piece].material for piece, _ in self.asm.index}, glues)
         components = []
-        for pieces in sorted(members.values(), key=lambda row: (self.asm.pieces[row[0]].material, row)):
+        for unit in self.plan.units:
+            pieces = set(unit.pieces)
             vertices = sorted(v for v, (piece, _) in self.asm.key.items() if piece in pieces)
-            components.append({"id": ",".join(pieces), "material": self.asm.pieces[pieces[0]].material,
-                               "pieces": pieces, "vertices": vertices})
+            components.append({"id": ",".join(unit.pieces), "unit": unit.id, "material": unit.material,
+                               "pieces": unit.pieces, "vertices": vertices})
         return components
 
     def _component_signature(self, component: dict, glues: list[Glue]) -> str:
@@ -1072,6 +1073,8 @@ class Reconstruction:
             if all(key in record["vertices"] for key in keys):
                 valid[i] = np.asarray([record["vertices"][key] for key in keys], dtype=float)
 
+        self.cross_keys = sorted(self._glue_key(glue) for glue in glues
+                                 if component_by_piece.get(glue.piece) != component_by_piece.get(glue.other))
         warm = self._warm_start(grower)
         seed = warm
         seed_dropped = solver.dropped.copy()
@@ -1128,6 +1131,10 @@ class Reconstruction:
             self.log(f"prebuilt {component['material']} component {i + 1}/{len(components)} "
                      f"({len(component['pieces'])} pieces)")
 
+        self.movable = self._changed_units(components, component_by_piece, set(missing)) \
+            if warm is not None and not self.rejoin else None
+        if self.movable is not None:
+            self.log(f"join moves {len(self.movable)} changed of {len(components)} units; the rest keep the saved pose")
         # Cross-component matches are solved as a smaller rigid-body problem below.
         # Retain their initial grow status for the glue report, but retry them in the join.
         self.grown_dropped = solver.dropped.copy()
@@ -1138,6 +1145,16 @@ class Reconstruction:
         if not components:
             return components, seed if seed is not None else x
         return components, x
+
+    def _changed_units(self, components: list[dict], component_by_piece: dict, rebuilt: set[int]) -> set[int] | None:
+        """Units rebuilt this run plus units whose glues to other units changed since the saved
+        pose; None when the saved pose has no join record (move every unit)."""
+        if self.saved_joins is None:
+            return None
+        changed = set(rebuilt)
+        for key in self.saved_joins.symmetric_difference(self.cross_keys):
+            changed.update(component_by_piece[piece] for piece in (key[1], key[4]) if piece in component_by_piece)
+        return changed
 
     def _anneal_component(self, solver: FoldSolver, x: np.ndarray, free: list[int]) -> np.ndarray:
         if not solver.wrong_folds(x).any():
@@ -1155,6 +1172,8 @@ class Reconstruction:
                          max_nfev: int) -> np.ndarray:
         """Close cross-component glues by moving cached subassemblies as rigid units."""
         from scipy.optimize import least_squares
+        from scipy.optimize._numdiff import approx_derivative, group_columns
+        from scipy.sparse import csr_matrix
         from scipy.spatial.transform import Rotation
 
         component_of_piece = {piece: i for i, component in enumerate(components)
@@ -1178,38 +1197,71 @@ class Reconstruction:
             a, b = component_of_piece.get(glue.piece), component_of_piece.get(glue.other)
             if a is not None and b is not None:
                 links[a] += 1; links[b] += 1
-        anchor = max(active_components, key=lambda i: (links[i], len(components[i]["vertices"])))
-        moving = [i for i in active_components if i != anchor]
+        if self.movable is None or set(active_components) <= self.movable:
+            # Every unit may move: hold the best-connected one still.
+            anchor = max(active_components, key=lambda i: (links[i], len(components[i]["vertices"])))
+            moving = [i for i in active_components if i != anchor]
+        else:
+            # Units unchanged since the saved pose stay where they are.
+            moving = [i for i in active_components if i in self.movable]
+        if not moving:
+            return x
         offsets = {component: 6 * j for j, component in enumerate(moving)}
         centres = {i: x[components[i]["vertices"]].mean(axis=0) for i in active_components}
         hinges = np.flatnonzero(np.isin(solver.hinge_glue, cross_glue))
         hglue = solver.hinge_glue[hinges]
         glue_ids, pa, pb = rows.T
 
-        def place(parameters):
-            posed = x.copy()
-            for component in moving:
+        # The residual reads only the corners of the join glues and their seams, so the
+        # solve moves just those; each row depends on at most two units (sparse Jacobian).
+        hinge_rows = solver.hinge[hinges]
+        used = np.unique(np.r_[pa, pb, hinge_rows[:, :6].ravel()])
+        local_pa, local_pb = np.searchsorted(used, pa), np.searchsorted(used, pb)
+        local_hinge = hinge_rows.copy()
+        local_hinge[:, :6] = np.searchsorted(used, hinge_rows[:, :6])
+        x_used, unit_used = x[used], vertex_component[used]
+        groups = [(component, np.flatnonzero(unit_used == component)) for component in moving]
+
+        def pose(parameters, points, members):
+            posed = points.copy()
+            for component, idx in members:
                 start = offsets[component]
                 rotation = Rotation.from_rotvec(parameters[start:start + 3])
-                translation = parameters[start + 3:start + 6]
-                vertices = components[component]["vertices"]
-                posed[vertices] = rotation.apply(x[vertices] - centres[component]) + centres[component] + translation
+                posed[idx] = (rotation.apply(points[idx] - centres[component]) + centres[component]
+                              + parameters[start + 3:start + 6])
             return posed
 
         def residual(parameters):
-            posed = place(parameters)
+            posed = pose(parameters, x_used, groups)
             weights = np.sqrt(solver.glue_weight[glue_ids])
-            parts = [(weights[:, None] * (posed[pa] - posed[pb])).ravel()]
+            parts = [(weights[:, None] * (posed[local_pa] - posed[local_pb])).ravel()]
             if len(hinges):
                 on = np.where(hglue < 0, 1.0, solver.glue_weight[hglue])
-                parts.append(solver.fold_weight * on * solver._signs(posed, hinges))
-                nl, nr = solver._normals(posed, hinges)
+                parts.append(solver.fold_weight * on * _hinge_signs(posed, local_hinge))
+                nl, nr = _hinge_normals(posed, local_hinge)
                 parts.append(solver.smooth_weight * on * np.linalg.norm(nl - nr, axis=1))
             return np.concatenate(parts)
 
-        result = least_squares(residual, np.zeros(6 * len(moving)), method="trf",
+        units_of_row = [unit_used[[i, j]] for i, j in zip(local_pa, local_pb) for _ in range(3)]
+        units_of_row += [unit_used[h[:6]] for h in local_hinge] * 2
+        ri, ci = [], []
+        for r, units in enumerate(units_of_row):
+            for component in set(units.tolist()):
+                if component in offsets:
+                    ri += [r] * 6
+                    ci += range(offsets[component], offsets[component] + 6)
+        pattern = csr_matrix((np.ones(len(ri), np.int8), (ri, ci)),
+                             shape=(len(units_of_row), 6 * len(moving)))
+        column_groups = group_columns(pattern)
+
+        def jacobian(parameters):
+            # Grouped finite differences (one residual call per colour of the unit graph,
+            # not per parameter), handed back dense so the exact trust-region solver is kept.
+            return approx_derivative(residual, parameters, sparsity=(pattern, column_groups)).toarray()
+
+        result = least_squares(residual, np.zeros(6 * len(moving)), jac=jacobian, method="trf",
                                x_scale="jac", max_nfev=max_nfev)
-        return place(result.x)
+        return pose(result.x, x, [(component, components[component]["vertices"]) for component in moving])
 
     def _vertex_key(self, global_id: int) -> str:
         piece_id, local_id = self.asm.key[global_id]
@@ -1226,6 +1278,8 @@ class Reconstruction:
                 with np.load(self.state_path, allow_pickle=False) as saved:
                     old_keys = json.loads(str(saved["keys"].item()))
                     old_x = np.asarray(saved["x"], dtype=float)
+                    joins = json.loads(str(saved["joins"].item())) if "joins" in saved.files else None
+                    self.saved_joins = {tuple(key) for key in joins} if joins is not None else None
             except (OSError, ValueError, KeyError, json.JSONDecodeError):
                 old_x = None
         if old_x is None:
@@ -1296,7 +1350,8 @@ class Reconstruction:
             with tempfile.NamedTemporaryFile(dir=self.state_path.parent, prefix="fold3d-state-tmp-",
                                              suffix=".npz", delete=False) as handle:
                 temporary = Path(handle.name)
-                np.savez_compressed(handle, keys=json.dumps(keys), x=pose)
+                np.savez_compressed(handle, keys=json.dumps(keys), x=pose,
+                                    joins=json.dumps(getattr(self, "cross_keys", None)))
             temporary.replace(self.state_path)
         finally:
             if temporary is not None and temporary.exists():
@@ -1305,13 +1360,18 @@ class Reconstruction:
     def _anneal(self, solver: FoldSolver, x: np.ndarray, components: list[dict]) -> np.ndarray:
         """Anneal cross-component fold directions while preserving prebuilt component shapes."""
         weight = solver.fold_weight
+        last = None
         for cycle in range(self.anneal):
             for fold_weight, rounds in ((30 * weight, 1), (12 * weight, 1), (4 * weight, 2), (weight, 3)):
                 solver.fold_weight = fold_weight
                 x = self._join_components(solver, x, components, max_nfev=60 * rounds)
                 solver.robust = 1.0 / (1.0 + (solver.gaps(x) / solver.gap_scale) ** 2)
-            self.log(f"fold pull cycle {cycle + 1}: {int(solver.wrong_folds(x).sum())} folds the wrong way, "
-                     f"{int((solver.gaps(x) <= self.gape).sum())} glues within {self.gape:g} mm")
+            counts = (int(solver.wrong_folds(x).sum()), int((solver.gaps(x) <= self.gape).sum()))
+            self.log(f"fold pull cycle {cycle + 1}: {counts[0]} folds the wrong way, "
+                     f"{counts[1]} glues within {self.gape:g} mm")
+            if counts == last:
+                break      # a cycle that changed neither count will not change the next one
+            last = counts
         solver.fold_weight = weight
         return x
 
@@ -1333,7 +1393,8 @@ class Reconstruction:
                 status = "proposed, closes" if proposed else "closes"
             rows.append({"number": g.number, "piece": g.piece, "tab_piece": g.other, "length_mm": f"{g.length:.1f}",
                          "length_diff_mm": f"{g.length_diff:.2f}", "gap_mm": f"{gaps[k]:.1f}",
-                         "look_alike": _look_alike(g.number) if proposed else "", "status": status})
+                         "look_alike": _look_alike(g.number) if proposed else "", "status": status,
+                         "stage": self.plan.stage(g.piece, g.other)})
         return sorted(rows, key=lambda r: (r["status"], -float(r["gap_mm"])))
 
     def write(self, out: Path, project: str) -> None:
@@ -1341,10 +1402,10 @@ class Reconstruction:
         x = self._posed()
         self._obj(out / "fold3d.obj", x)
         rows = self.glue_rows()
-        with (out / "fold3d-glue.csv").open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, list(rows[0]))
-            writer.writeheader()
-            writer.writerows(rows)
+        self.plan.write(out, {(r["number"], r["piece"], r["tab_piece"]): r["status"] for r in rows})
+        self.log(self.plan.summary())
+        self._csv(out / "fold3d-glue.csv", rows, ["number", "piece", "tab_piece", "length_mm", "length_diff_mm",
+                                                  "gap_mm", "look_alike", "status", "stage"])
         self._preview(out / "fold3d.png", x)
         self._viewer_json(out / "fold3d.json", x, rows)
         moves, inspect = CornerAdjuster(self).rows()
@@ -1501,6 +1562,8 @@ def main() -> int:
     parser.add_argument("--gape", type=float, default=3.0, help="let go of a glue whose ends stay this far apart (mm)")
     parser.add_argument("--anneal", type=int, default=5, help="cycles of hard then easy fold pull after the build")
     parser.add_argument("--cold", action="store_true", help="ignore saved 3D poses and place pieces from scratch")
+    parser.add_argument("--rejoin", action="store_true",
+                        help="let the join move every unit, not only units changed since the saved pose")
     args = parser.parse_args()
     project = args.config.stem
     out = args.config.parent
@@ -1509,10 +1572,11 @@ def main() -> int:
         parser.error(f"{svg} not found; run make first")
     import yaml
     reference = (yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}).get("reference") or {}
-    run = Reconstruction(svg, gape_mm=args.gape, reference=reference, anneal=args.anneal, cold=args.cold)
+    run = Reconstruction(svg, gape_mm=args.gape, reference=reference, anneal=args.anneal, cold=args.cold,
+                         rejoin=args.rejoin)
     run.run()
     run.write(out, project)
-    print(f"Wrote {out / 'fold3d.obj'}, fold3d-glue.csv, fold3d-baseline.csv, fold3d-moves.csv, fold3d-inspect.csv and fold3d.png")
+    print(f"Wrote {out / 'fold3d.obj'}, fold3d-glue.csv, fold3d-units.csv, fold3d-joins.csv, fold3d-baseline.csv, fold3d-moves.csv, fold3d-inspect.csv and fold3d.png")
     return 0
 
 
