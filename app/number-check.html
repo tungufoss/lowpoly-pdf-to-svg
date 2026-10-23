@@ -131,39 +131,78 @@ function alignModelFaces(faces, outline) {
   }
   const source = bestLoop.map(k => points.get(k));
   if (source.length < 3) return p => p;
-  const sample = (poly, count) => {
-    const lengths = poly.map((p, i) => Math.hypot(poly[(i + 1) % poly.length][0] - p[0], poly[(i + 1) % poly.length][1] - p[1]));
-    const total = lengths.reduce((a, b) => a + b, 0);
-    return Array.from({length: count}, (_, i) => {
-      let d = total * i / count, edge = 0;
-      while (edge < lengths.length - 1 && d > lengths[edge]) d -= lengths[edge++];
-      const a = poly[edge], b = poly[(edge + 1) % poly.length], t = d / (lengths[edge] || 1);
-      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-    });
-  };
-  const count = 96, src = sample(source, count), dst = sample(outline, count);
+  return fitSimilarity(source, outline);
+}
+function samplePolygon(poly, count) {
+  const lengths = poly.map((p, i) => Math.hypot(poly[(i + 1) % poly.length][0] - p[0], poly[(i + 1) % poly.length][1] - p[1]));
+  const total = lengths.reduce((a, b) => a + b, 0);
+  return Array.from({length: count}, (_, i) => {
+    let d = total * i / count, edge = 0;
+    while (edge < lengths.length - 1 && d > lengths[edge]) d -= lengths[edge++];
+    const a = poly[edge], b = poly[(edge + 1) % poly.length], t = d / (lengths[edge] || 1);
+    return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  });
+}
+// Rotation, scale and shift (after an optional mirror in x) laying each point a[i] onto b[i]; the map
+// carries its summed squared error and whether it reflects.
+function procrustes(a, b, reflect) {
   const centre = p => p.reduce((c, q) => [c[0] + q[0] / p.length, c[1] + q[1] / p.length], [0, 0]);
-  let best = null;
-  for (const reflect of [false, true]) for (const reverse of [false, true]) for (let shift = 0; shift < count; shift++) {
-    const a = src.map(([x, y]) => [reflect ? -x : x, y]), b = dst.map((_, i) => dst[(shift + (reverse ? count - i : i)) % count]);
-    const ac = centre(a), bc = centre(b);
-    let A = 0, B = 0, norm = 0;
-    for (let i = 0; i < count; i++) {
-      const x = a[i][0] - ac[0], y = a[i][1] - ac[1], X = b[i][0] - bc[0], Y = b[i][1] - bc[1];
-      A += x * X + y * Y; B += x * Y - y * X; norm += x * x + y * y;
-    }
-    const scale = Math.hypot(A, B) / (norm || 1), angle = Math.atan2(B, A), c = Math.cos(angle), s = Math.sin(angle);
-    let error = 0;
-    for (let i = 0; i < count; i++) {
-      const x = (a[i][0] - ac[0]) * scale, y = (a[i][1] - ac[1]) * scale;
-      error += (c * x - s * y + bc[0] - b[i][0]) ** 2 + (s * x + c * y + bc[1] - b[i][1]) ** 2;
-    }
-    if (!best || error < best.error) best = {error, reflect, ac, bc, scale, c, s};
+  const ra = a.map(([x, y]) => [reflect ? -x : x, y]), ac = centre(ra), bc = centre(b);
+  let A = 0, B = 0, norm = 0;
+  for (let i = 0; i < ra.length; i++) {
+    const x = ra[i][0] - ac[0], y = ra[i][1] - ac[1], X = b[i][0] - bc[0], Y = b[i][1] - bc[1];
+    A += x * X + y * Y; B += x * Y - y * X; norm += x * x + y * y;
   }
-  return ([x, y]) => {
-    const u = (best.reflect ? -x : x) - (best.reflect ? -best.ac[0] : best.ac[0]), v = y - best.ac[1];
-    return [best.bc[0] + best.scale * (best.c * u - best.s * v), best.bc[1] + best.scale * (best.s * u + best.c * v)];
+  const scale = Math.hypot(A, B) / (norm || 1), angle = Math.atan2(B, A), c = Math.cos(angle), s = Math.sin(angle);
+  const map = ([x, y]) => {
+    const u = (reflect ? -x : x) - ac[0], v = y - ac[1];
+    return [bc[0] + scale * (c * u - s * v), bc[1] + scale * (s * u + c * v)];
   };
+  map.reflect = reflect;
+  map.error = a.reduce((sum, p, i) => { const q = map(p); return sum + (q[0] - b[i][0]) ** 2 + (q[1] - b[i][1]) ** 2; }, 0);
+  return map;
+}
+// Rotation, optional reflection, scale and shift that best lay polygon `source` onto polygon `outline`,
+// both resampled by arc length; the map carries its rms error in mm. `mirror` prefers a reflection
+// unless turning fits clearly better, so a piece symmetric on its own still maps onto its twin mirrored.
+function fitSimilarity(source, outline, mirror = false) {
+  const count = 96, src = samplePolygon(source, count), dst = samplePolygon(outline, count);
+  const bestOf = {false: null, true: null};
+  for (const reflect of [false, true]) for (const reverse of [false, true]) for (let shift = 0; shift < count; shift++) {
+    const map = procrustes(src, dst.map((_, i) => dst[(shift + (reverse ? count - i : i)) % count]), reflect);
+    if (!bestOf[reflect] || map.error < bestOf[reflect].error) bestOf[reflect] = map;
+  }
+  const best = mirror ? (bestOf.false.error < bestOf.true.error * 0.25 ? bestOf.false : bestOf.true)
+    : bestOf.false.error <= bestOf.true.error ? bestOf.false : bestOf.true;
+  best.rms = Math.sqrt(best.error / count);
+  return best;
+}
+// This piece's outline laid mirrored onto its twin's, fitted on the corners themselves. Every pairing
+// of an outline edge with a twin edge proposes a fit (as does the whole-outline fit); the one landing
+// most corners on twin corners wins and is refitted on corners that are each other's nearest, so a
+// corner the trace added or missed on one side does not drag the rest. rms is over those pairs.
+function fitTwin(from, to) {
+  const nearest = (p, list) => list.reduce((best, c, k) => {
+    const d = Math.hypot(c[0] - p[0], c[1] - p[1]); return d < best.d ? {d, k} : best; }, {d: Infinity, k: -1});
+  const score = map => from.reduce((s, p) => { const d = nearest(map(p), to).d;
+    return d < 1 ? {hits: s.hits + 1, sq: s.sq + d * d} : s; }, {hits: 0, sq: 0});
+  const better = (u, v) => u.hits > v.hits || (u.hits === v.hits && u.sq < v.sq);
+  let map = fitSimilarity(from, to, true), best = score(map);
+  for (let i = 0; i < from.length; i++) for (let j = 0; j < to.length; j++) for (const step of [1, -1]) {
+    const guess = procrustes([from[i], from[(i + 1) % from.length]], [to[j], to[(j + step + to.length) % to.length]], true);
+    const s = score(guess);
+    if (better(s, best)) { map = guess; best = s; }
+  }
+  for (let round = 0; round < 4; round++) {
+    const moved = from.map(map), pairs = [];
+    moved.forEach((p, i) => { const hit = nearest(p, to);
+      if (hit.d < 2 * TWIN_SNAP_MM && nearest(to[hit.k], moved).k === i) pairs.push([from[i], to[hit.k]]); });
+    if (pairs.length < 3) break;
+    map = procrustes(pairs.map(p => p[0]), pairs.map(p => p[1]), map.reflect);
+    map.rms = Math.sqrt(map.error / pairs.length); map.paired = pairs.length;
+  }
+  map.paired ??= 0; map.rms ??= Infinity;
+  return map;
 }
 document.getElementById("cardstock-tint-strength").value = String(tintStrength);
 document.getElementById("cardstock-tint-strength").addEventListener("input", e => setTintStrength(e.target.value));
@@ -565,6 +604,63 @@ const segDist = (q, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx 
   const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l));
   return Math.hypot(q[0] - a[0] - t * dx, q[1] - a[1] - t * dy); };
 let mode = "add", foldKind = "valley";
+const TWIN_FIT_MM = 1;    // paired corners further apart than this (rms) are not mirror copies; refuse to copy
+const TWIN_SNAP_MM = 1.5; // a copied end lands on the twin's own corner or fold end this close
+const copyNotes = {};     // piece -> what the last copy onto it did, shown on its next drawing only
+const hasEdits = f => f.add.length || f.drop.length || f.move.length || f.pointDrop.length || f.numbers.length;
+// Mirror one piece's edits onto its twin: lay the traced outline onto the twin's (a reflection), map
+// every fold, corner and number across and snap it to the twin's own geometry. Each copied edit is
+// logged on the twin, so its Undo takes them back one at a time.
+function copyEditsToTwin(fromId, toId) {
+  const from = D.traces[fromId], to = D.traces[toId];
+  if (!from || !to) return "The twin has no trace to copy onto.";
+  const map = fitTwin(from.outline, to.outline);
+  if (map.rms > TWIN_FIT_MM || map.paired < Math.min(from.outline.length, to.outline.length) / 2)
+    return `Nothing copied: the two outlines do not line up as mirror copies (${map.paired} corners match, ${
+      Number.isFinite(map.rms) ? `${map.rms.toFixed(1)} mm apart` : "no fit"}). Fix the outline first, or copy by hand.`;
+  const f = fixOf(fromId), g = fixOf(toId);
+  const round = p => p.map(v => +(+v).toFixed(2));
+  const near = (p, list) => { let best = TWIN_SNAP_MM, hit = null;
+    for (const c of list) { const d = Math.hypot(c[0] - p[0], c[1] - p[1]); if (d < best) { best = d; hit = c; } }
+    return hit; };
+  const close = (p, c) => Math.hypot(p[0] - c[0], p[1] - c[1]) < 0.3;
+  let copied = 0, missed = 0;
+  const push = (list, item) => { g[list].push(item); g.log.push(list); copied++; };
+  // Corner moves first: the twin's folds and dropped corners are matched where its corners now are.
+  for (const m of f.move) {
+    const a = near(map(m.a), to.outline);
+    if (!a) { missed++; continue; }
+    if (!g.move.some(n => close(n.a, a))) push("move", {a: a.slice(), b: round(map(m.b))});
+  }
+  const corners = to.outline.map(c => movedIn(g, c));
+  const folds = to.folds.map(h => [movedIn(g, [h[0], h[1]]), movedIn(g, [h[2], h[3]])]);
+  for (const p of f.pointDrop) {
+    const c = near(map(p), corners);
+    if (!c) { missed++; continue; }
+    if (!g.pointDrop.some(q => close(q, c))) push("pointDrop", c.slice());
+  }
+  for (const d of f.drop) {
+    const a = map(d.a), b = map(d.b);
+    const hit = folds.find(([u, v]) => Math.max(Math.hypot(u[0] - a[0], u[1] - a[1]), Math.hypot(v[0] - b[0], v[1] - b[1])) < TWIN_SNAP_MM
+                                    || Math.max(Math.hypot(u[0] - b[0], u[1] - b[1]), Math.hypot(v[0] - a[0], v[1] - a[1])) < TWIN_SNAP_MM);
+    if (!hit) { missed++; continue; }
+    if (!g.drop.some(e => (close(e.a, hit[0]) && close(e.b, hit[1])) || (close(e.a, hit[1]) && close(e.b, hit[0]))))
+      push("drop", {a: hit[0].slice(), b: hit[1].slice()});
+  }
+  const ends = [...corners, ...folds.flat(), ...g.add.flatMap(h => [h.a, h.b])];
+  for (const l of f.add) {
+    const a = round(near(map(l.a), ends) || map(l.a)), b = round(near(map(l.b), ends) || map(l.b));
+    if (!g.add.some(h => (close(h.a, a) && close(h.b, b)) || (close(h.a, b) && close(h.b, a))))
+      push("add", {kind: l.kind, a, b});
+  }
+  for (const n of f.numbers) {
+    const [x, y] = round(map([n.x, n.y]));
+    if (!g.numbers.some(m => Math.hypot(m.x - x, m.y - y) < 1)) push("numbers", {x, y, number: n.number});
+  }
+  return copied || missed ? `Copied ${copied} edit${copied === 1 ? "" : "s"} from ${fromId}${missed
+    ? `; ${missed} had no matching corner or fold here, add ${missed === 1 ? "it" : "them"} by hand` : ""}. Undo takes them back one at a time.`
+    : `${toId} already has all of ${fromId}'s edits.`;
+}
 // A piece and its mirror twin are reviewed together, side by side; pairs needing the most work come first.
 function pieceOrder() {
   const byId = Object.fromEntries((D.pieces || []).map(p => [p.piece, p])), seen = new Set(), units = [];
@@ -718,11 +814,14 @@ function pieceCard(q, list, rerender) {
       <div class="meta">${q.why.length ? q.why.map(w => `<div class="hint">${w}</div>`).join("") : "Nothing flagged; check the corners and folds look complete."}</div>
       <div class="tools"><button data-m="add">Add fold</button><select><option value="valley">valley (dashed)</option><option value="mountain">mountain (dash-dot)</option></select><button data-m="drop">Remove fold</button><button data-m="move">Move corner</button><button data-m="point">Remove corner</button><button data-m="number">Numbers</button>${reviewServer ? '<button data-a="show-3d">Show in 3D</button>' : ""}</div>
       ${pending.length ? `<div class="tools"><button data-a="twin">Add the twin's ${pending.length} fold${pending.length > 1 ? "s" : ""}</button></div>` : ""}
+      ${q.twin && D.traces[q.twin] && hasEdits(f) ? `<div class="tools"><button data-a="copy-twin" title="Mirror this piece's added and removed folds, moved and removed corners and added numbers onto ${q.twin}">Copy my edits to mirror ${q.twin}</button></div>` : ""}
+      ${copyNotes[q.piece] ? `<div class="hint">${copyNotes[q.piece]}</div>` : ""}
       <div class="meta how"></div>
       <label class="meta">Note for edits the page cannot make<textarea rows="3" style="width:100%;font:inherit">${f.note.replace(/</g, "&lt;")}</textarea></label>
       <div class="tools"><button data-a="undo">Undo</button></div>
       <div class="meta">Green dashes are traced folds, purple ones you added, red ones you removed, orange ones the mirror twin has (click one to add it); purple corners you moved. Enter = OK.</div></div>`;
   list.appendChild(el);
+  delete copyNotes[q.piece];
   const svg = el.querySelector("svg"), clicks = el.querySelector(".clicks"), how = el.querySelector(".how");
   const kind = el.querySelector("select");
   kind.value = foldKind; kind.addEventListener("change", () => { foldKind = kind.value; });
@@ -822,6 +921,8 @@ function pieceCard(q, list, rerender) {
   });
   el.querySelector("[data-a=twin]")?.addEventListener("click", () => {
     for (const g of pending) { f.add.push({kind: g.kind, a: g.a, b: g.b}); f.log.push("add"); } changed(); });
+  el.querySelector("[data-a=copy-twin]")?.addEventListener("click", () => {
+    copyNotes[q.twin] = copyEditsToTwin(q.piece, q.twin); changed(); });
 }
 document.addEventListener("keydown", e => {
   if (filter === "pieces" && e.key === "Enter" && !["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) {
