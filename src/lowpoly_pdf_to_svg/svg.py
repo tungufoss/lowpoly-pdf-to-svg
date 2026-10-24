@@ -48,9 +48,10 @@ class PageResult:
 
 
 class InkscapeSvgWriter:
-    def __init__(self, title: str):
+    def __init__(self, title: str, materials: dict[str, Material] | None = None):
         self.title = title
         self.pages: list[PageResult] = []
+        self.materials = materials or {}   # material id -> Material, for pieces moved off their page's cardstock
 
     def add(self, image: PageImage, layout: PageLayout, material: Material) -> None:
         self.pages.append(PageResult(image, layout, material))
@@ -92,8 +93,10 @@ class InkscapeSvgWriter:
             sources.append(f'<image id="source-{number:02d}" xlink:href={quoteattr(href)} x="{ox:.3f}" y="{oy:.3f}" '
                            f'width="{w:.3f}" height="{h:.3f}" preserveAspectRatio="none"/>')
             pen = _Pen(page.image.mm_per_px, ox, oy, label_mm)
-            group = by_material.setdefault(page.material.id, (page.material, []))[1]
-            group.extend(self._piece(piece, pen) for piece in page.layout.pieces)
+            for piece in page.layout.pieces:
+                # A piece the YAML moves to another cardstock goes in that cardstock's layer.
+                material = self.materials.get(piece.material, page.material)
+                by_material.setdefault(material.id, (material, []))[1].append(self._piece(piece, pen))
             stray = [pen.path(points) for points in page.layout.stray_lines]
             stray += [pen.box(label.box) for label in page.layout.stray_labels]
             reviews.append(f'<g id="review-{number:02d}" inkscape:label="Page {number:02d}">\n' + "\n".join(stray) + "\n</g>")

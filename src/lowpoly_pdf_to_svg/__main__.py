@@ -97,6 +97,15 @@ def main() -> int:
     for page, layout, _ in fresh:
         with (cache / f"page-{layout.page:02d}.pickle").open("wb") as handle:
             pickle.dump((page, layout), handle)
+    # Pieces the YAML cuts from another cardstock than their page's (set after the cache, so a
+    # change to the YAML needs no retrace).
+    moved = project.piece_materials()
+    for _, layout, material in results:
+        for piece in layout.pieces:
+            piece.material = moved[piece.id].id if piece.id in moved else material.id
+    unknown = set(moved) - {piece.id for _, layout, _ in results for piece in layout.pieces}
+    if unknown and not args.page and args.redo is None:
+        print(f"warning: the YAML moves piece(s) the trace does not have: {', '.join(sorted(unknown))}", file=sys.stderr)
     if corrections.rows:
         applied, missed = corrections.apply([(layout, page.mm_per_px) for page, layout, _ in results])
         print(f"applied {applied} hand corrections" + (f", {len(missed)} matched no number: "
@@ -156,7 +165,7 @@ def main() -> int:
     sure += mirrored
     labels = [label for _, layout, _ in results for piece in layout.pieces for label in piece.labels]
 
-    writer = InkscapeSvgWriter(f"{project.name.title()} papercraft")
+    writer = InkscapeSvgWriter(f"{project.name.title()} papercraft", {m.id: m for m in project.materials})
     for page, layout, material in results:
         writer.add(page, layout, material)
     folds = [f for _, layout, _ in results for p in layout.pieces for f in p.folds]
