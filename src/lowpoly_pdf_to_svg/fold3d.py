@@ -1025,6 +1025,11 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
         piece.split_faces()
         piece.mark_labels()
         piece.mark_tabs()
+    twins = MirrorTwins.read(svg.with_name("mirror-mismatches.csv"))
+    _tabs_from_twins(pieces, twins)
+    marked = {piece.id: ([face.tab for face in piece.faces], [label.tab for label in piece.labels])
+              for piece in pieces}  # tab marks before the overrides
+    for piece in pieces:
         edge_use = collections.Counter(frozenset(edge) for face in piece.faces for edge in piece.face_edges(face))
         for index, face in enumerate(piece.faces):
             override = tab_overrides.get(f"{piece.id}/{index}")
@@ -1037,7 +1042,77 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
                     centre = np.mean([piece.points[v] for v in face.vertices], axis=0)
                     label = min(labels, key=lambda item: np.linalg.norm(item.centre - centre))
                     label.tab = override
+    _drop_stale_tab_overrides(pieces, marked, twins)
     return pieces
+
+
+def _tabs_from_twins(pieces: list[FlatPiece], twins: list[tuple[str, str]], tol_mm: float = 0.5) -> None:
+    """A flap (a face joined to the rest by one fold) shaped like a tab on the mirror twin is a tab
+    here too, even where its number could not be tied to the fold (e.g. a one-digit number set
+    off the edge)."""
+    by_id = {piece.id: piece for piece in pieces}
+
+    def sides(piece: FlatPiece, face) -> list[float]:
+        return sorted(piece.length(*edge) for edge in piece.face_edges(face))
+
+    for pair in twins:
+        if not all(p in by_id for p in pair):
+            continue
+        for piece, twin in (pair, pair[::-1]):
+            piece, twin = by_id[piece], by_id[twin]
+            shared = collections.Counter(frozenset(e) for f in piece.faces for e in piece.face_edges(f))
+            tabs = [sides(twin, face) for face in twin.faces if face.tab]
+            for index, face in enumerate(piece.faces):
+                folds = [e for e in piece.face_edges(face) if shared[frozenset(e)] == 2]
+                if face.tab or len(folds) != 1:
+                    continue
+                mine = sides(piece, face)
+                if any(len(t) == len(mine) and max(abs(a - b) for a, b in zip(t, mine)) < tol_mm for t in tabs):
+                    face.tab = True
+                    for label in piece.labels:
+                        if label.edge and frozenset(label.edge) == frozenset(folds[0]):
+                            label.tab = True
+                    print(f"{piece.id}/{index}: a tab, like its shape on the mirror twin {twin.id}")
+
+
+def _surface_mm2(piece: FlatPiece) -> float:
+    def area(points: np.ndarray) -> float:
+        x, y = points[:, 0], points[:, 1]
+        return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+    return sum(area(np.asarray([piece.points[v] for v in face.vertices])) for face in piece.faces if not face.tab)
+
+
+def _drop_stale_tab_overrides(pieces: list[FlatPiece], marked: dict, twins: list[tuple[str, str]],
+                              tolerance: float = 0.1) -> None:
+    """Tab overrides are keyed by face index, so a retrace that renumbers a piece's faces sends
+    them to the wrong faces. Twins have the same surface (only tabs may differ), so a piece whose
+    overrides take its surface area away from its twin's, when the automatic marks matched it,
+    goes back to the automatic marks."""
+    by_id = {piece.id: piece for piece in pieces}
+
+    def apart(a: float, b: float) -> float:
+        return abs(a - b) / max(a, b, 1e-9)
+
+    for pair in twins:
+        if not all(p in by_id for p in pair):
+            continue
+        for piece, twin in (pair, pair[::-1]):
+            piece, twin = by_id[piece], by_id[twin]
+            now = [face.tab for face in piece.faces]
+            faces, labels = marked[piece.id]
+            if now == faces:
+                continue
+            with_overrides = apart(_surface_mm2(piece), _surface_mm2(twin))
+            for face, tab in zip(piece.faces, faces):
+                face.tab = tab
+            if with_overrides > tolerance and apart(_surface_mm2(piece), _surface_mm2(twin)) <= tolerance:
+                for label, tab in zip(piece.labels, labels):
+                    label.tab = tab
+                print(f"warning: ignored the tab overrides on {piece.id}: they leave its surface "
+                      f"{100 * with_overrides:.0f}% off its twin {twin.id}'s (face numbers moved?)")
+            else:
+                for face, tab in zip(piece.faces, now):
+                    face.tab = tab
 
 
 class Reconstruction:
@@ -1704,9 +1779,13 @@ class Reconstruction:
                           "gap_mm": round(float(gaps[k]), 1), "status": r["status"]})
         wrong = self.solver.wrong_folds(self.x)
         inspect = {row["piece"]: row["reason"] for row in CornerAdjuster(self).rows()[1]}
+        twin = {}
+        for a, b in MirrorTwins.read(self.svg.with_name("mirror-mismatches.csv")):
+            twin[a], twin[b] = b, a
         data = {"source": self.svg.name, "units": "mm",
                 "vertices": [[round(float(c), 2) for c in p] for p in x],
-                "pieces": {pid: {"material": piece.material, "inspect": inspect.get(pid, "")}
+                "pieces": {pid: {"material": piece.material, "inspect": inspect.get(pid, ""),
+                                      **({"twin": twin[pid]} if pid in twin else {})}
                            for pid, piece in self.asm.pieces.items()},
                 "faces": faces, "glues": glues,
                 "wrong_folds": [[int(h[0]), int(h[1])] for h in self.solver.hinge[wrong]],

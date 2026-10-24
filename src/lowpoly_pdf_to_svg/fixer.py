@@ -76,7 +76,7 @@ class CheckData:
             for piece in layout.pieces:
                 traces[piece.id] = {
                     "outline": [[round(x * mm, 2), round(y * mm, 2)] for x, y in piece.outline],
-                    "folds": [[round(f.a[0] * mm, 2), round(f.a[1] * mm, 2), round(f.b[0] * mm, 2), round(f.b[1] * mm, 2)]
+                    "folds": [[round(f.a[0] * mm, 2), round(f.a[1] * mm, 2), round(f.b[0] * mm, 2), round(f.b[1] * mm, 2), f.kind.value]
                               for f in piece.folds]}
         return traces
 
