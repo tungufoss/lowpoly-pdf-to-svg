@@ -22,6 +22,7 @@ class Material:
     id: str
     name: str
     pages: tuple[int, ...]
+    pieces: tuple[str, ...] = ()   # pieces cut from this cardstock although their page is printed for another
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,8 @@ class Project:
         try:
             source, output = raw["source"], raw["output"]
             materials = tuple(
-                Material(str(m["id"]), str(m["name"]), tuple(int(p) for p in m["pages"]))
+                Material(str(m["id"]), str(m["name"]), tuple(int(p) for p in m.get("pages") or ()),
+                         tuple(str(p) for p in m.get("pieces") or ()))
                 for m in raw["materials"]
             )
             project = cls(
@@ -63,6 +65,16 @@ class Project:
         if project.sheet_size not in SHEETS_MM:
             raise ValueError(f"{path}: unknown sheet {project.sheet_size!r}; use one of {sorted(SHEETS_MM)}")
         return project
+
+    def piece_materials(self) -> dict[str, Material]:
+        """Pieces moved onto another cardstock than their page's, rejecting pieces listed twice."""
+        seen: dict[str, Material] = {}
+        for material in self.materials:
+            for piece in material.pieces:
+                if piece in seen:
+                    raise ValueError(f"{piece} is assigned to both {seen[piece].id} and {material.id}")
+                seen[piece] = material
+        return seen
 
     def pages(self) -> list[tuple[int, Material]]:
         """Every assigned page with its material, rejecting pages listed twice."""

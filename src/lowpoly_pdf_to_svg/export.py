@@ -45,7 +45,7 @@ LABEL = f"{{{INKSCAPE}}}label"
 DEFAULT_COLORS = {"red": "#c62828", "green": "#2e7d32", "yellow": "#f9d71c", "black": "#212121",
                   "white": "#ffffff", "beige": "#e8d9b5", "blue": "#1565c0", "orange": "#ef6c00",
                   "brown": "#6d4c41", "grey": "#9e9e9e", "gray": "#9e9e9e", "pink": "#f48fb1",
-                  "purple": "#6a1b9a"}
+                  "purple": "#6a1b9a", "rust": "#b7410e", "gold": "#d4a017"}
 FALLBACK_COLOR = "#cccccc"
 CONTRACT = "lowpoly-export/1"  # bump when the attributes below change meaning
 

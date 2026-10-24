@@ -49,6 +49,9 @@ materials:                 # one entry per cardstock colour
   - id: red
     name: Red cardstock
     pages: [4, 5, 6, 7, 8, 9, 10]
+  - id: brown
+    name: Brown cardstock
+    pieces: [piece-04-06, piece-05-06]   # cut from brown although page 4 and 5 are red
 
 reference:                 # optional: the finished model, checked by the 3D fold
   parts: 1                 # glues into one piece
@@ -57,6 +60,12 @@ reference:                 # optional: the finished model, checked by the 3D fol
   triangles: 1238          # face and corner counts, when the finished model is known
   corners: 633
 ```
+
+A page belongs to one material (`pages:`). A page whose pieces are cut from more than one
+cardstock lists the odd pieces under their own material (`pieces:`, the trace's piece ids); a
+material may have only `pieces:`. Such a piece carries its own `data-material` and sits in its
+cardstock's layer, so the export colour, the glue units and the 3D colours follow it. Moving a piece
+needs no retrace: `make redo` with no pages rebuilds the SVG from the saved traces.
 
 `make -f fold3d.mk` compares each `reference:` count it knows (`triangles`, `corners`, `parts`,
 `openings`) with the folded trace in `fold3d-baseline.csv`. A part is a set of pieces held together
