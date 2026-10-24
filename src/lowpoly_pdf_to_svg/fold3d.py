@@ -37,6 +37,9 @@ LABEL_REACH_MM = 3.0     # as detect.py: a number further than this from every l
 LENGTH_TOLERANCE_MM = 1.0  # as edges.py: a clean pair's two lines agree this well
 SNAP_MM = 0.4            # fold ends and outline corners closer than this are one vertex
 SETTLE_MM = 0.5          # a glue still this far open after the rigid join lets its pieces bend
+MIRROR_FIT_MM = 1.0      # twins whose flat surface corners mirror within this (rms) are tied in 3D
+MIRROR_WEIGHT = 0.5      # pull of a twin corner onto its partner's mirror image (glue pulls are 1)
+MIRROR_SCALE_MM = 4.0    # a twin pair this far from mirrored pulls a quarter as hard (Cauchy)
 
 Point = tuple[float, float]
 
@@ -395,6 +398,21 @@ class FoldSolver:
         rows += [(int(p), int(q)) for _, p, q in self.glue for _ in range(3)]
         rows += [tuple(int(v) for v in h[:6]) for h in self.hinge] * 2
         self.row_verts = rows
+        self.mirror = np.empty((0, 3), dtype=np.int64)    # (twin pair, vertex, its mirror vertex)
+        self.mirror_weight = np.empty(0)                  # per twin pair
+        self.plane = (np.array([1.0, 0.0, 0.0]), 0.0)     # mirror plane n . p = d
+
+    def set_mirror(self, mirror: np.ndarray, pairs: int) -> None:
+        """Tie twin corners: each vertex is pulled onto the mirror image of its partner."""
+        self.mirror = mirror
+        self.mirror_weight = np.full(pairs, MIRROR_WEIGHT)
+        self.row_verts = self.row_verts[:len(self.row_verts) - getattr(self, "_mirror_rows", 0)]
+        self.row_verts += [(int(i), int(j)) for _, i, j in mirror for _ in range(3)]
+        self._mirror_rows = 3 * len(mirror)
+
+    def reflect(self, points: np.ndarray) -> np.ndarray:
+        n, d = self.plane
+        return points - 2 * (points @ n - d)[:, None] * n
 
     @property
     def glue_weight(self) -> np.ndarray:
@@ -406,11 +424,13 @@ class FoldSolver:
         rigid_end = len(self.rigid)
         glue_end = rigid_end + 3 * len(self.glue)
         fold_end = glue_end + len(self.hinge)
+        smooth_end = fold_end + len(self.hinge)
         return (
             rows[rows < rigid_end],
             rows[(rows >= rigid_end) & (rows < glue_end)] - rigid_end,
             rows[(rows >= glue_end) & (rows < fold_end)] - glue_end,
-            rows[rows >= fold_end] - fold_end,
+            rows[(rows >= fold_end) & (rows < smooth_end)] - fold_end,
+            rows[rows >= smooth_end] - smooth_end,
         )
 
     def residuals(self, flat: np.ndarray, selection: tuple[np.ndarray, ...] | None = None) -> np.ndarray:
@@ -419,8 +439,9 @@ class FoldSolver:
             rigid_rows = np.arange(len(self.rigid))
             glue_rows = np.arange(3 * len(self.glue))
             fold_rows = smooth_rows = np.arange(len(self.hinge))
+            mirror_rows = np.arange(3 * len(self.mirror))
         else:
-            rigid_rows, glue_rows, fold_rows, smooth_rows = selection
+            rigid_rows, glue_rows, fold_rows, smooth_rows, mirror_rows = selection
 
         parts = []
         if len(rigid_rows):
@@ -443,6 +464,10 @@ class FoldSolver:
             weights[glued] = self.glue_weight[hinge_glue[glued]]
             nl, nr = self._normals(x, smooth_rows)
             parts.append(self.smooth_weight * weights * np.linalg.norm(nl - nr, axis=1))
+        if len(mirror_rows):
+            row, axis = np.divmod(mirror_rows, 3)
+            pair, i, j = self.mirror[row].T
+            parts.append(np.sqrt(self.mirror_weight[pair]) * (x[j, axis] - self.reflect(x[i])[np.arange(len(i)), axis]))
         return np.concatenate(parts) if parts else np.empty(0)
 
     def _normals(self, x: np.ndarray, indices: np.ndarray | None = None):
@@ -896,6 +921,95 @@ class CornerAdjuster:
         return moves, inspect
 
 
+class MirrorTwins:
+    """Mirror twins (from the trace's mirror-mismatches.csv) matched corner by corner on the flat
+    pattern, so the fold can hold each twin to the mirror image of the other. Only surface faces
+    count: a twin's glue tabs may differ. Pairs whose surface corners do not mirror within
+    MIRROR_FIT_MM are left untied."""
+
+    def __init__(self, asm: Assembly, pairs: list[tuple[str, str]]):
+        self.asm = asm
+        surface = collections.defaultdict(set)
+        for pid, verts in asm.faces:
+            surface[pid].update(verts)
+        self.pairs: list[tuple[str, str]] = []
+        self.matches: list[list[tuple[int, int]]] = []
+        self.flat_rms: list[float] = []
+        for a, b in pairs:
+            if a not in surface or b not in surface:
+                continue
+            va, vb = sorted(surface[a]), sorted(surface[b])
+            found = self._match(asm.flat[va], asm.flat[vb])
+            if found is None:
+                continue
+            rms, index = found
+            self.pairs.append((a, b))
+            self.matches.append([(va[i], vb[j]) for i, j in index])
+            self.flat_rms.append(rms)
+
+    @staticmethod
+    def _match(p: np.ndarray, q: np.ndarray):
+        """Corner pairs laying p mirrored onto q (rotation after a reflection, no scale), or None."""
+        if len(p) != len(q) or len(p) < 3:
+            return None
+        p = p * [-1, 1]
+        cp, cq = p.mean(0), q.mean(0)
+        best = None
+        for angle in np.radians(np.arange(0, 360, 5)):
+            c, s = np.cos(angle), np.sin(angle)
+            moved = (p - cp) @ np.array([[c, s], [-s, c]]) + cq
+            for _ in range(4):
+                d = np.linalg.norm(moved[:, None] - q[None], axis=2)
+                j = d.argmin(1)
+                pairs = [(i, k) for i, k in enumerate(j) if d[:, k].argmin() == i]
+                if len(pairs) < 3:
+                    break
+                src, dst = p[[i for i, _ in pairs]], q[[k for _, k in pairs]]
+                u, _, vt = np.linalg.svd((src - src.mean(0)).T @ (dst - dst.mean(0)))
+                rotation = u @ vt
+                moved = (p - src.mean(0)) @ rotation + dst.mean(0)
+            d = np.linalg.norm(moved[:, None] - q[None], axis=2)
+            j = d.argmin(1)
+            if len(set(j)) != len(j):
+                continue
+            rms = float(np.sqrt((d[np.arange(len(p)), j] ** 2).mean()))
+            if best is None or rms < best[0]:
+                best = (rms, list(enumerate(j)))
+        return best if best and best[0] <= MIRROR_FIT_MM else None
+
+    def ties(self) -> np.ndarray:
+        """(twin pair, vertex, its mirror vertex), both ways round."""
+        return np.array([(k, i, j) for k, match in enumerate(self.matches) for a, b in match
+                         for i, j in ((a, b), (b, a))], dtype=np.int64).reshape(-1, 3)
+
+    def plane(self, x: np.ndarray, weight: np.ndarray | None = None) -> tuple[np.ndarray, float]:
+        """The plane that best mirrors tied corners onto each other. The best improper rotation
+        laying each corner on its twin (Kabsch with det -1) is nearly a reflection; its normal is
+        the axis it flips, and the plane passes through the tied corners' midpoints."""
+        ties = [(k, a, b) for k, match in enumerate(self.matches) for a, b in match]
+        w = np.ones(len(ties)) if weight is None else np.array([weight[k] for k, _, _ in ties])
+        p, q = x[[a for _, a, _ in ties]], x[[b for _, _, b in ties]]
+        cp, cq = np.average(p, axis=0, weights=w), np.average(q, axis=0, weights=w)
+        u, _, vt = np.linalg.svd(((q - cq) * w[:, None]).T @ (p - cp))
+        flip = u @ np.diag([1, 1, -1]) @ vt if np.linalg.det(u @ vt) > 0 else u @ vt
+        values, vectors = np.linalg.eig(flip)
+        normal = np.real(vectors[:, np.argmin(np.abs(values + 1))])
+        normal /= np.linalg.norm(normal)
+        return normal, float(np.average(((p + q) / 2) @ normal, weights=w))
+
+    def asymmetry(self, x: np.ndarray, reflect) -> np.ndarray:
+        """Per twin pair, how far (rms, mm) its corners sit from their partner's mirror image."""
+        return np.array([np.sqrt(np.mean([np.sum((x[b] - reflect(x[[a]])[0]) ** 2) for a, b in match]))
+                         for match in self.matches])
+
+    @staticmethod
+    def read(path: Path) -> list[tuple[str, str]]:
+        if not path.is_file():
+            return []
+        with path.open(newline="", encoding="utf-8") as handle:
+            return sorted({tuple(sorted((r["piece"], r["twin"]))) for r in csv.DictReader(handle)})
+
+
 def read_pieces(svg: Path) -> list[FlatPiece]:
     """The traced pieces split into faces, numbers on their edges, tabs marked, with the
     hand-kept fold3d-tab-overrides.json applied."""
@@ -996,6 +1110,7 @@ class Reconstruction:
         x = self._join_components(solver, x, components, max_nfev=160)
         x = self._anneal(solver, x, components)
         x = self._settle(solver, x, components)
+        x = self._mirror(solver, x)
         self._drop_gaping(solver, x)
         self.log(f"rebuilt with {len(keep)} glues, {int((~solver.dropped).sum())} close")
         self.solver, self.x = solver, x
@@ -1164,6 +1279,36 @@ class Reconstruction:
         self.log(f"settling {len(open_glues)} open glues: {len(pieces)} pieces may bend")
         x = solver.solve(x, free=free, rounds=3, max_nfev=100, reweight=True)
         self.log(f"settled: {int((solver.gaps(x) <= self.gape).sum())} glues within {self.gape:g} mm")
+        return x
+
+    def _mirror(self, solver: FoldSolver, x: np.ndarray) -> np.ndarray:
+        """For a model the YAML says is symmetric, hold each twin's corners to the mirror image of
+        its partner's across the plane the twins agree on best. Twins far from mirrored pull less
+        (Cauchy), so a pair traced differently cannot drag the glue apart; the plane is fitted
+        again between rounds."""
+        self.twins = None
+        if not self.reference.get("symmetric"):
+            return x
+        twins = MirrorTwins(self.asm, MirrorTwins.read(self.svg.with_name("mirror-mismatches.csv")))
+        if not twins.pairs:
+            return x
+        self.twins = twins
+        solver.set_mirror(twins.ties(), len(twins.pairs))
+        solver.plane = twins.plane(x)
+        before = twins.asymmetry(x, solver.reflect)
+        self.log(f"mirror: {len(twins.pairs)} twin pairs tied; median {np.median(before):.1f} mm from mirrored, "
+                 f"{int((before <= 2).sum())} within 2 mm")
+        weight = solver.fold_weight
+        solver.fold_weight = 4 * weight    # hold fold directions while the halves move into line
+        for _ in range(3):
+            off = twins.asymmetry(x, solver.reflect)
+            solver.mirror_weight = MIRROR_WEIGHT / (1.0 + (off / MIRROR_SCALE_MM) ** 2)
+            x = solver.solve(x, rounds=1, max_nfev=40, reweight=True)
+            solver.plane = twins.plane(x, solver.mirror_weight)
+        solver.fold_weight = weight
+        after = twins.asymmetry(x, solver.reflect)
+        self.log(f"mirror: median {np.median(after):.1f} mm, {int((after <= 2).sum())} of {len(after)} within 2 mm; "
+                 f"{int((solver.gaps(x) <= self.gape).sum())} glues within {self.gape:g} mm")
         return x
 
     def _changed_units(self, components: list[dict], component_by_piece: dict, rebuilt: set[int]) -> set[int] | None:
@@ -1436,6 +1581,13 @@ class Reconstruction:
         self.log(f"corners to move: {len(moves)} in {len({m['piece'] for m in moves})} pieces; "
                  f"pieces to look at: {len(inspect)}; pieces with a fold bent the wrong way, left as traced: "
                  f"{len(CornerAdjuster(self).unsettled())}")
+        if getattr(self, "twins", None):
+            off = self.twins.asymmetry(self.x, self.solver.reflect)
+            self._csv(out / "fold3d-mirror.csv",
+                      [{"piece": a, "twin": b, "flat_rms_mm": round(r, 2), "folded_mm": round(float(o), 2),
+                        "status": "mirrors" if o <= 2 else "differs"}
+                       for (a, b), r, o in sorted(zip(self.twins.pairs, self.twins.flat_rms, off), key=lambda t: -t[2])],
+                      ["piece", "twin", "flat_rms_mm", "folded_mm", "status"])
         if self.reference:
             self._baseline(out / "fold3d-baseline.csv")
         counts = collections.Counter(r["status"] for r in rows)
@@ -1506,6 +1658,11 @@ class Reconstruction:
         rows = [{"measure": key, "traced": counts[key], "reference": int(self.reference[key]),
                  "difference": counts[key] - int(self.reference[key])}
                 for key in ("triangles", "corners", "parts", "openings") if key in self.reference]
+        if getattr(self, "twins", None):
+            # Every tied twin pair should fold to within 2 mm of its partner's mirror image.
+            mirrored = int((self.twins.asymmetry(self.x, self.solver.reflect) <= 2).sum())
+            rows.append({"measure": "mirrored_pairs", "traced": mirrored, "reference": len(self.twins.pairs),
+                         "difference": mirrored - len(self.twins.pairs)})
         with path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, ["measure", "traced", "reference", "difference"])
             writer.writeheader()
