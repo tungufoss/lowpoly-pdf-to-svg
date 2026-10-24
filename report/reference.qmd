@@ -13,6 +13,7 @@ title: "Reference"
 | `--dpi` | `180` | PDF render resolution |
 | `--page` | all pages | Convert only this 1-based page; repeatable |
 | `--pdftoppm` | `pdftoppm` | Poppler `pdftoppm` executable |
+| `--allow-no-ocr` | off | trace even without Tesseract; edge numbers become `?` and glues no longer pair (by default a retrace without Tesseract stops with an error) |
 
 ## Make targets
 

@@ -33,6 +33,7 @@ def main() -> int:
                         help="trace only these pages again and reuse the saved trace of every other page "
                              "(no pages: just redraw the SVG and redo the edge check)")
     parser.add_argument("--pdftoppm", default="pdftoppm", help="Poppler pdftoppm executable")
+    parser.add_argument("--allow-no-ocr", action="store_true", help="trace even when tesseract is missing (numbers become '?')")
     args = parser.parse_args()
 
     try:
@@ -80,6 +81,11 @@ def main() -> int:
         print(f"page {number:02d} ({material.id}): {len(results[-1][1].pieces)} pieces", flush=True)
 
     reader = EdgeNumberReader()
+    if not reader.available and fresh and not args.allow_no_ocr:
+        # Retracing without OCR writes '?' over every edge number and unpairs the glues.
+        print("error: tesseract was not found; install it, or pass --allow-no-ocr to leave edge numbers as '?'",
+              file=sys.stderr)
+        return 1
     if not reader.available:
         print("warning: tesseract was not found, so edge numbers are left as '?'", file=sys.stderr)
     corrections = Corrections.load(output / f"number-corrections.csv")

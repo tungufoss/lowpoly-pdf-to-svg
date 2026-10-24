@@ -273,13 +273,15 @@ class Assembly:
         self.pieces = {p.id: p for p in pieces}
         self.index: dict[tuple[str, int], int] = {}
         self.faces: list[tuple[str, list[int]]] = []       # piece, global vertex ids (ccw printed)
+        self.face_index: list[int] = []                     # each face's index in piece.faces (tabs skipped)
         self.apex: dict[tuple[int, int], int] = {}          # directed face edge -> another corner of that face
         for piece in pieces:
-            for face in piece.faces:
+            for k, face in enumerate(piece.faces):
                 if face.tab:
                     continue
                 verts = [self.index.setdefault((piece.id, v), len(self.index)) for v in face.vertices]
                 self.faces.append((piece.id, verts))
+                self.face_index.append(k)
                 n = len(verts)
                 for i in range(n):
                     self.apex[(verts[i], verts[(i + 1) % n])] = verts[(i + 2) % n]
@@ -1464,12 +1466,8 @@ class Reconstruction:
             if not self.solver.dropped[k]:
                 parent[find(int(p))] = find(int(q))
         corners = len({find(v) for _, verts in self.asm.faces for v in verts})
-        # Surface faces only: glue tabs end up hidden under the face they are glued to.
-        surface, seen = [], collections.Counter()
-        for pid, verts in self.asm.faces:
-            if not self.asm.pieces[pid].faces[seen[pid]].tab:
-                surface.append([find(v) for v in verts])
-            seen[pid] += 1
+        # Assembly faces are surface faces only: glue tabs end up hidden under the face they are glued to.
+        surface = [[find(v) for v in verts] for _, verts in self.asm.faces]
         part = {}
 
         def whole(v):
@@ -1524,16 +1522,15 @@ class Reconstruction:
 
     def _viewer_json(self, path: Path, x: np.ndarray, rows: list[dict]) -> None:
         """Everything app/fold3d-viewer.html draws, with ids that stay put between the 3D model and
-        the pattern: face `piece-PP-NN/k` is the k-th surface face of that piece group in the SVG,
+        the pattern: face `piece-PP-NN/k` is the k-th face of that piece group in the SVG (the index tab marks use),
         with its corners both folded (vertex ids) and flat (document mm, as the SVG draws them)."""
         import json
 
-        faces, seen = [], collections.Counter()
-        for pid, verts in self.asm.faces:
-            faces.append({"id": f"{pid}/{seen[pid]}", "piece": pid, "tab": self.asm.pieces[pid].faces[seen[pid]].tab, "v": verts,
+        faces = []
+        for (pid, verts), k in zip(self.asm.faces, self.asm.face_index):
+            faces.append({"id": f"{pid}/{k}", "piece": pid, "tab": False, "v": verts,
                           "flat": [[round(float(c), 2) for c in self.asm.pieces[pid].points[self.asm.key[v][1]]]
                                    for v in verts]})
-            seen[pid] += 1
         status = {(r["number"], r["piece"], r["tab_piece"]): r for r in rows}
         gaps = self.solver.gaps(self.x)
         glues = []
