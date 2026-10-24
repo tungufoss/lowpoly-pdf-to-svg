@@ -556,17 +556,23 @@ class PatternView {
   }
   listen() {
     let drag = null;
+    // The Piece Review panel sits inside this pane: its buttons and page get their own pointer
+    // events (capturing the pointer here would swallow the click on Close).
+    const inEditor = e => e.target.closest?.("#piece-editor");
     this.el.addEventListener("contextmenu", e => {
+      if (inEditor(e)) return;
       e.preventDefault();
       const hit = document.elementsFromPoint(e.clientX, e.clientY).find(n => n.dataset && n.dataset.face !== undefined);
       if (hit) this.onContextMenu(Number(hit.dataset.face), e.clientX, e.clientY);
     });
     this.el.addEventListener("wheel", e => {
+      if (inEditor(e)) return;
       e.preventDefault();
       const [x, y] = this.toSvg(e), k = Math.exp(e.deltaY * 0.0015), [vx, vy, vw, vh] = this.view;
       this.setView([x - (x - vx) * k, y - (y - vy) * k, vw * k, vh * k]);
     }, { passive: false });
     this.el.addEventListener("pointerdown", e => {
+      if (inEditor(e)) return;
       drag = { x: e.clientX, y: e.clientY, view: [...this.view], moved: false, s: this.toSvg(e)[2] };
       this.el.setPointerCapture(e.pointerId);
     });
@@ -585,7 +591,7 @@ class PatternView {
       }
       drag = null;
     });
-    this.el.addEventListener("dblclick", () => this.setView([...this.full]));
+    this.el.addEventListener("dblclick", e => { if (!inEditor(e)) this.setView([...this.full]); });
   }
 }
 
