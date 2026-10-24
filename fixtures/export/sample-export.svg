@@ -20,8 +20,8 @@
 </g>
 </g>
 <g id="piece-01-01-draw" inkscape:label="Draw" data-operation="draw" style="fill:#ffffff;stroke:none;font-family:Arial,sans-serif;font-weight:bold;text-anchor:middle">
-<text x="20.000" y="38.000" font-size="2.00" dominant-baseline="central" transform="rotate(0.0 20.000 38.000)" data-operation="draw" data-edge="edge" data-pdf-number="558" data-label="1B" data-pair-status="ok">1B</text>
-<text x="33.000" y="20.000" font-size="2.00" dominant-baseline="central" transform="rotate(90.0 33.000 20.000)" data-operation="draw" data-edge="edge" data-pdf-number="12" data-label="1A" data-pair-status="unpaired">1A</text>
+<text x="20.000" y="38.700" font-size="2.00" dominant-baseline="central" transform="rotate(0.0 20.000 38.700)" data-operation="draw" data-edge="edge" text-anchor="middle" data-pdf-number="558" data-label="1B" data-pair-status="ok">1B</text>
+<text x="33.700" y="22.500" font-size="2.00" dominant-baseline="central" transform="rotate(-90.0 33.700 22.500)" data-operation="draw" data-edge="edge" text-anchor="middle" data-pdf-number="12" data-label="1A" data-pair-status="unpaired">1A</text>
 </g>
 </g>
 </g>

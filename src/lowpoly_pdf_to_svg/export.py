@@ -81,6 +81,7 @@ class Edge:
     partner: str
     status: str
     side: str  # "tab" or "edge"
+    line: tuple[float, ...] = ()  # the edge the number marks: ax ay bx by, page mm
 
 
 @dataclass
@@ -114,7 +115,9 @@ class GluePairs:
     def read(cls, path: Path) -> "GluePairs":
         with path.open(newline="", encoding="utf-8") as handle:
             return cls([Edge(row["number"], row["piece"], float(row["x_mm"]), float(row["y_mm"]),
-                             row["partner_piece"], row["status"], row["side"]) for row in csv.DictReader(handle)])
+                             row["partner_piece"], row["status"], row["side"],
+                             tuple(float(v) for v in (row.get("line_mm") or "").split()))
+                        for row in csv.DictReader(handle)])
 
     def find(self, piece: str, number: str, x_mm: float, y_mm: float, used: set[int]) -> tuple[GluePair, Edge | None]:
         """The pair of the nearest unused edge row with this piece and number; a number with
@@ -195,13 +198,21 @@ class ExportWriter:
             page = int(match.group(1)) if match else 0
             ox, oy = offsets.get(f"page-{page:02d}", (0.0, 0.0))
             self._describe(piece, page, ox, oy)
+            outline, on_edge = _outline(piece), {}
             for text in piece.iter(f"{{{SVG}}}text"):
                 number = (text.text or "").strip()
                 pair, edge = self.pairs.find(piece.get("id"), number,
                                              float(text.get("x")) - ox, float(text.get("y")) - oy, used)
                 if edge:
                     text.set("data-edge", edge.side)  # tab or plain edge, from the edge table
+                    if len(edge.line) == 4 and outline:
+                        on_edge.setdefault(edge.line, []).append(text)
                 texts.append((text, pair))
+            for line, group in on_edge.items():  # two numbers on one edge: spread along it
+                group.sort(key=lambda e: (float(e.get("x")) - line[0] - ox) * (line[2] - line[0])
+                           + (float(e.get("y")) - line[1] - oy) * (line[3] - line[1]))
+                for k, text in enumerate(group, 1):
+                    _place(text, line, ox, oy, outline, k / (len(group) + 1))
         self.pairs.assign(self.alphabet)
         for text, pair in texts:
             text.set("data-pdf-number", text.text or "")
@@ -253,6 +264,57 @@ class ExportWriter:
                     text.set("data-operation", "draw")
                 if _luminance(color) < 0.35:
                     group.set("style", _style(group.get("style", ""), fill="#ffffff"))
+
+
+def _outline(piece: ET.Element) -> list[tuple[float, float]]:
+    """Outer cut outline of a piece (first subpath of its cut path), document mm."""
+    for path in piece.iter(f"{{{SVG}}}path"):
+        if path.get("data-operation") == "cut":
+            first = re.split(r"[Mm]", path.get("d", ""))[1] if "M" in path.get("d", "") else ""
+            v = [float(n) for n in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", first)]
+            return list(zip(v[::2], v[1::2]))
+    return []
+
+
+def _inside(p: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
+    x, y, inside = p[0], p[1], False
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        if (y1 > y) != (y2 > y) and x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+            inside = not inside
+    return inside
+
+
+def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
+           outline: list[tuple[float, float]], at: float = 0.5) -> None:
+    """Stand the label on the edge it marks: centred at `at` along the edge, baseline along the
+    edge, its top pointing away from the edge (perpendicular to it), on the side where the PDF
+    printed the number, and moved inwards until the whole label lies inside the cut outline."""
+    ax, ay, bx, by = line[0] + ox, line[1] + oy, line[2] + ox, line[3] + oy
+    length = math.hypot(bx - ax, by - ay)
+    if length < 1e-6:
+        return
+    ux, uy = (bx - ax) / length, (by - ay) / length
+    mx, my = ax + (bx - ax) * at, ay + (by - ay) * at
+    nx, ny = -uy, ux
+    px, py = float(text.get("x")), float(text.get("y"))
+    if (px - mx) * nx + (py - my) * ny < 0:
+        nx, ny = -nx, -ny
+    size = float(text.get("font-size", "2"))
+    half_w, half_h = 0.6 * size * max(1, len(text.text or "")) / 2, 0.4 * size
+    for step in range(16):
+        d = half_h + 0.5 + 0.25 * step
+        cx, cy = mx + nx * d, my + ny * d
+        corners = [(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
+                   for sx in (-1, 1) for sy in (-1, 1)]
+        if all(_inside(c, outline) for c in corners):
+            break
+    else:
+        return  # no room: keep the PDF's placement
+    angle = math.degrees(math.atan2(nx, -ny))  # rotate(angle) turns the text's up (0,-1) onto (nx, ny)
+    text.set("x", f"{cx:.3f}")
+    text.set("y", f"{cy:.3f}")
+    text.set("text-anchor", "middle")
+    text.set("transform", f"rotate({angle:.1f} {cx:.3f} {cy:.3f})")
 
 
 class ExportContract:
