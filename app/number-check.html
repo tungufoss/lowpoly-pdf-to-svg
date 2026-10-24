@@ -687,6 +687,11 @@ function pieceOrder() {
     if (requestedPiece) {
       const selected = filtered.findIndex(u => u.unit.some(q => q.piece === requestedPiece));
       if (selected >= 0) at = selected;
+      else {
+        // The asked-for pair has no geometry discrepancy: still open it first, ahead of the list.
+        const unit = units.find(u => u.unit.some(q => q.piece === requestedPiece));
+        if (unit) { at = 0; return [unit, ...filtered].map(u => u.unit); }
+      }
     }
     return filtered.map(u => u.unit);
   }
@@ -745,7 +750,9 @@ function reviewPiece(list) {
     } else { save(true); go(1); }
   });
   if (embeddedPieceReview) {
-    nav.querySelector(".meta").textContent = `Mirror discrepancy ${at + 1} of ${order.length}: ${unit.map(q => q.piece).join(" and ")} — ${difference}.`;
+    nav.querySelector(".meta").textContent = difference
+      ? `Mirror discrepancy ${at + 1} of ${order.length}: ${unit.map(q => q.piece).join(" and ")} — ${difference}.`
+      : `Editing ${unit.map(q => q.piece).join(" and ")}: no geometry discrepancy between them.`;
     const accept = document.createElement("button"); accept.textContent = "Accept difference & next";
     accept.addEventListener("click", () => {
       let accepted = {};
@@ -754,7 +761,7 @@ function reviewPiece(list) {
       localStorage.setItem(mirrorAcceptedKey(), JSON.stringify(accepted));
       order = null; at = 0; list.innerHTML = ""; reviewPiece(list);
     });
-    nav.appendChild(accept);
+    if (difference) nav.appendChild(accept);
   }
   list.appendChild(nav);
   const pair = document.createElement("div");
