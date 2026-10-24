@@ -1383,10 +1383,47 @@ class Reconstruction:
             x = solver.solve(x, rounds=1, max_nfev=40, reweight=True)
             solver.plane = twins.plane(x, solver.mirror_weight)
         solver.fold_weight = weight
+        x = self._mirror_snap(solver, twins, x)
         after = twins.asymmetry(x, solver.reflect)
         self.log(f"mirror: median {np.median(after):.1f} mm, {int((after <= 2).sum())} of {len(after)} within 2 mm; "
                  f"{int((solver.gaps(x) <= self.gape).sum())} glues within {self.gape:g} mm")
         return x
+
+    def _mirror_snap(self, solver: FoldSolver, twins: MirrorTwins, x: np.ndarray) -> np.ndarray:
+        """Twins still far from mirrored after the soft pull: lay the side with more open glues
+        exactly onto the mirror image of the other, worst pair first, then let the glue settle
+        with the twins held firmly. Kept only if no more glues gape than before."""
+        off = twins.asymmetry(x, solver.reflect)
+        far = [k for k in np.argsort(-off) if off[k] > 2.0]
+        if not far:
+            return x
+        gaps = solver.gaps(x)
+        before = int((gaps <= self.gape).sum())
+        trouble = collections.Counter()
+        for g, gap in zip(solver.glues, gaps):
+            if gap > self.gape:
+                trouble[g.piece] += 1
+                trouble[g.other] += 1
+        y = x.copy()
+        for k in far:
+            a, b = twins.pairs[k]
+            match = twins.matches[k]
+            if trouble[a] < trouble[b]:
+                y[[j for _, j in match]] = solver.reflect(y[[i for i, _ in match]])
+            else:
+                y[[i for i, _ in match]] = solver.reflect(y[[j for _, j in match]])
+        weight, solver.fold_weight = solver.fold_weight, 4 * solver.fold_weight
+        solver.mirror_weight = np.full(len(twins.pairs), 4 * MIRROR_WEIGHT)
+        y = solver.solve(y, rounds=2, max_nfev=60, reweight=True)
+        solver.fold_weight = weight
+        after = int((solver.gaps(y) <= self.gape).sum())
+        moved = ", ".join(f"{twins.pairs[k][0][6:]}/{twins.pairs[k][1][6:]}" for k in far)
+        if after < before:
+            self.log(f"mirror snap: {len(far)} pairs ({moved}) laid mirrored would close {after} glues "
+                     f"instead of {before}; kept the soft pull")
+            return x
+        self.log(f"mirror snap: {len(far)} pairs ({moved}) laid exactly mirrored; {after} glues close (was {before})")
+        return y
 
     def _changed_units(self, components: list[dict], component_by_piece: dict, rebuilt: set[int]) -> set[int] | None:
         """Units rebuilt this run plus units whose glues to other units changed since the saved
