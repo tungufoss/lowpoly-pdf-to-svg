@@ -15,7 +15,7 @@ the piece review) and writes
 
 The review SVG, the check page and the fix loop keep the PDF numbers; only this file
 is renumbered. Labels are handed out in PDF-number order from an alphabet without
-look-alikes (0/O, 1/I, Q, and 6/9 since labels sit at any angle), all of one width and
+look-alikes (0/O, 1/I, Q; G reads as 6 in pen; 9 is an upside-down 6), all of one width and
 each with at least one letter so none reads as a PDF number: two characters cover 851
 glue pairs, three beyond that. The export follows the contract in
 report/export-contract.qmd; `--check FILE` tests a file against it.
@@ -54,8 +54,8 @@ class LabelAlphabet:
     """Short labels of one width, at least two characters (2A, not A next to 2A), as few
     characters as the number of glue pairs allows."""
 
-    # No 0/O, 1/I or Q (look alike) and no 6/9 (labels sit at any angle).
-    SYMBOLS = "1234578ABCDEFGHJKLMNPRSTUVWXYZ"
+    # No 0/O, 1/I or Q (look alike), no G (reads as 6 in pen; Helga picked 6), no 9 (an upside-down 6).
+    SYMBOLS = "12345678ABCDEFHJKLMNPRSTUVWXYZ"
 
     def __init__(self, symbols: str = SYMBOLS, shortest: int = 2):
         self.symbols, self.shortest = symbols, shortest
@@ -212,7 +212,7 @@ class ExportWriter:
                 group.sort(key=lambda e: (float(e.get("x")) - line[0] - ox) * (line[2] - line[0])
                            + (float(e.get("y")) - line[1] - oy) * (line[3] - line[1]))
                 for k, text in enumerate(group, 1):
-                    _place(text, line, ox, oy, outline, k / (len(group) + 1))
+                    _place(text, line, ox, oy, outline, k / (len(group) + 1), text.get("data-edge") == "tab")
         self.pairs.assign(self.alphabet)
         for text, pair in texts:
             text.set("data-pdf-number", text.text or "")
@@ -284,11 +284,29 @@ def _inside(p: tuple[float, float], poly: list[tuple[float, float]]) -> bool:
     return inside
 
 
+def _depth(mx: float, my: float, nx: float, ny: float, poly: list[tuple[float, float]]) -> float:
+    """How far the piece reaches from (mx, my) along (nx, ny): 0 if that side is outside."""
+    if not _inside((mx + nx * 0.05, my + ny * 0.05), poly):
+        return 0.0
+    best = math.inf
+    for (x1, y1), (x2, y2) in zip(poly, poly[1:] + poly[:1]):
+        ex, ey = x2 - x1, y2 - y1
+        den = nx * ey - ny * ex
+        if abs(den) < 1e-12:
+            continue
+        t = ((x1 - mx) * ey - (y1 - my) * ex) / den
+        s = ((x1 - mx) * ny - (y1 - my) * nx) / den
+        if t > 0.05 and 0 <= s <= 1:
+            best = min(best, t)
+    return 0.0 if best == math.inf else best
+
+
 def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
-           outline: list[tuple[float, float]], at: float = 0.5) -> None:
+           outline: list[tuple[float, float]], at: float = 0.5, tab: bool = False) -> None:
     """Stand the label on the edge it marks: centred at `at` along the edge, baseline along the
-    edge, its top pointing away from the edge (perpendicular to it), on the side where the PDF
-    printed the number, and moved inwards until the whole label lies inside the cut outline."""
+    edge, its top pointing away from the edge (perpendicular to it), inside the cut outline.
+    A cut edge has the piece on one side only; a tab's number marks its fold, and the label goes
+    on the tab (the shallower side), centred across it when it fits."""
     ax, ay, bx, by = line[0] + ox, line[1] + oy, line[2] + ox, line[3] + oy
     length = math.hypot(bx - ax, by - ay)
     if length < 1e-6:
@@ -296,13 +314,21 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
     ux, uy = (bx - ax) / length, (by - ay) / length
     mx, my = ax + (bx - ax) * at, ay + (by - ay) * at
     nx, ny = -uy, ux
-    px, py = float(text.get("x")), float(text.get("y"))
-    if (px - mx) * nx + (py - my) * ny < 0:
-        nx, ny = -nx, -ny
+    plus, minus = _depth(mx, my, nx, ny, outline), _depth(mx, my, -nx, -ny, outline)
+    if plus and minus:  # both sides inside: a fold; the tab is the shallower side
+        flip = (minus < plus) if tab else (minus > plus)
+    elif plus or minus:
+        flip = not plus
+    else:  # the line is off the outline: keep the side the PDF printed it on
+        px, py = float(text.get("x")), float(text.get("y"))
+        flip = (px - mx) * nx + (py - my) * ny < 0
+    if flip:
+        nx, ny, plus = -nx, -ny, minus
     size = float(text.get("font-size", "2"))
     half_w, half_h = 0.6 * size * max(1, len(text.text or "")) / 2, 0.4 * size
+    start = max(half_h + 0.5, plus / 2) if tab and plus else half_h + 0.5
     for step in range(16):
-        d = half_h + 0.5 + 0.25 * step
+        d = start + 0.25 * step
         cx, cy = mx + nx * d, my + ny * d
         corners = [(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
                    for sx in (-1, 1) for sy in (-1, 1)]
