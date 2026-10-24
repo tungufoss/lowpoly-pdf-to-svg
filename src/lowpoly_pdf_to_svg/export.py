@@ -105,7 +105,9 @@ class GluePairs:
             key = ((edge.number, *sorted((edge.piece, edge.partner))) if edge.partner
                    else (edge.number, edge.piece, index))
             pairs.setdefault(key, GluePair(edge.number)).edges.append(edge)
-        self.pairs = sorted(pairs.values(), key=lambda p: (_numeric(p.number), p.edges[0].piece))
+        # Labels run consecutively through the sheets: a pair is numbered at the first piece
+        # (page, then piece on the page) that carries it, so 1A, 1B, ... start on the first sheet.
+        self.pairs = sorted(pairs.values(), key=lambda p: (min(e.piece for e in p.edges), _numeric(p.number)))
         self._orphans: dict[str, GluePair] = {}
 
     @classmethod
