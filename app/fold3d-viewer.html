@@ -47,6 +47,13 @@
   #orbit-pad button { border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--panel) 88%, transparent);
     color: var(--ink); font: 18px/1 system-ui, sans-serif; cursor: pointer; }
   #orbit-pad button:hover { background: var(--panel); }
+  #pair-bar { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 3; display: flex; flex-wrap: wrap;
+    align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px;
+    background: color-mix(in srgb, var(--panel) 92%, transparent); color: var(--ink); }
+  #pair-bar[hidden] { display: none; }
+  #pair-bar button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--panel); color: var(--ink); cursor: pointer; }
+  #pair-label { flex: 1 1 200px; }
   #face-menu { position: fixed; z-index: 10; min-width: 180px; padding: 5px; border: 1px solid var(--line);
     border-radius: 7px; background: var(--panel); box-shadow: 0 4px 16px #0004; }
   #face-menu[hidden] { display: none; }
@@ -93,6 +100,7 @@
   <h1 id="title">Folded model</h1>
   <span class="stats" id="stats"></span>
   <button id="fit-view" type="button">Overview</button>
+  <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
   <button id="save-tabs" type="button" disabled title="Mark a face as a tab to enable this">Save tab marks &amp; re-glue</button>
   <progress id="tab-rebuild-progress" aria-label="Re-glue progress" hidden></progress>
@@ -103,6 +111,13 @@
 </header>
 <main>
   <div class="pane" id="three">
+    <div id="pair-bar" role="toolbar" aria-label="Mirror pairs" hidden>
+      <button type="button" data-step="-1" title="Previous pair (B)">◀ Back</button>
+      <span id="pair-label"></span>
+      <button type="button" data-step="1" title="Next pair (N)">Next ▶</button>
+      <button type="button" id="pair-edit">Edit pair…</button>
+      <button type="button" id="pair-close" aria-label="Stop stepping through pairs">✕</button>
+    </div>
     <div id="orbit-pad" aria-label="Rotate model">
       <span></span><button type="button" data-turn="up" aria-label="Rotate up" title="Rotate up">↑</button><span></span>
       <button type="button" data-turn="left" aria-label="Rotate left" title="Rotate left">←</button>
@@ -173,6 +188,60 @@ class Model {
     // before export. Inferring a tab from the neighbouring surface face paints
     // real mirror surfaces white and makes the two sides appear different.
     return new Set(this.faces.flatMap((face, i) => face.tab === true ? [i] : []));
+  }
+  // Mirror twins from the printed shapes: a piece and its twin are cut from the same cardstock
+  // with the same surface area and outline length, however their folds were traced. Each
+  // piece's closest match is its twin when the choice is mutual and close (within ~6%).
+  findTwins() {
+    const measure = piece => {
+      const edges = new Map(); let area = 0;
+      for (const i of this.facesOf.get(piece)) {
+        const p = this.faces[i].flat;
+        let twice = 0;
+        p.forEach((a, k) => {
+          const b = p[(k + 1) % p.length], key = [a.join(","), b.join(",")].sort().join("|");
+          twice += a[0] * b[1] - b[0] * a[1];
+          const edge = edges.get(key) || {count: 0, length: Math.hypot(b[0] - a[0], b[1] - a[1])};
+          edge.count++; edges.set(key, edge);
+        });
+        area += Math.abs(twice) / 2;
+      }
+      const outline = [...edges.values()].filter(e => e.count === 1).reduce((sum, e) => sum + e.length, 0);
+      return {area, outline, material: this.pieces[piece].material};
+    };
+    // A converter that lists each piece's twin (pieces[p].twin) is taken at its word.
+    const listed = new Map(Object.entries(this.pieces).filter(([, p]) => p.twin).map(([id, p]) => [id, p.twin]));
+    if (listed.size) { this.unlikeTwins = new Set(); return listed; }
+    const sizes = new Map([...this.facesOf.keys()].map(piece => [piece, measure(piece)]));
+    const cost = (a, b) => Math.abs(a.area - b.area) / Math.max(a.area, b.area)
+      + Math.abs(a.outline - b.outline) / Math.max(a.outline, b.outline);
+    const best = new Map();
+    for (const [piece, size] of sizes) {
+      let match = null, lowest = Infinity;
+      for (const [other, otherSize] of sizes)
+        if (other !== piece && otherSize.material === size.material && cost(size, otherSize) < lowest) {
+          match = other; lowest = cost(size, otherSize); }
+      best.set(piece, {match, lowest});
+    }
+    const twins = new Map();
+    for (const [piece, {match, lowest}] of best)
+      if (match && best.get(match).match === piece && lowest < 0.06) twins.set(piece, match);
+    // Pieces left over were traced differently from their twin (the pairs worth a look):
+    // pair them closest first within each cardstock, and remember they differ.
+    this.unlikeTwins = new Set();
+    const left = [...sizes.keys()].filter(piece => !twins.has(piece));
+    const options = left.flatMap((a, i) => left.slice(i + 1).filter(b => sizes.get(a).material === sizes.get(b).material)
+      .map(b => ({a, b, cost: cost(sizes.get(a), sizes.get(b))}))).sort((u, v) => u.cost - v.cost);
+    for (const {a, b} of options) if (!twins.has(a) && !twins.has(b)) {
+      twins.set(a, b); twins.set(b, a); this.unlikeTwins.add(a); this.unlikeTwins.add(b);
+    }
+    return twins;
+  }
+  // How much needs a look on a piece: its open glues and the folds on it bent the wrong way.
+  trouble(piece) {
+    this.vertexPieces ??= this.faces.reduce((map, f) => { f.v.forEach(v => map.set(v, f.piece)); return map; }, new Map());
+    return this.gluesOf(piece).filter(g => this.isOpen(g) && !g.status.startsWith("proposed by shape")).length
+      + this.wrong_folds.filter(pair => pair.some(v => this.vertexPieces.get(v) === piece)).length;
   }
 }
 
@@ -357,8 +426,8 @@ class FoldedView {
     this.camera.position.add(centre.clone().sub(this.controls.target));
     this.controls.target.copy(centre); this.controls.update();
   }
-  focusPiece(piece) {
-    const faces = this.model.facesOf.get(piece) || [];
+  focusPiece(pieces) {
+    const faces = [pieces].flat().flatMap(piece => this.model.facesOf.get(piece) || []);
     const points = faces.flatMap(i => this.model.faces[i].v.map(v => new THREE.Vector3(...this.model.vertices[v])));
     if (!points.length) return;
     const box = new THREE.Box3().setFromPoints(points), centre = box.getCenter(new THREE.Vector3());
@@ -647,6 +716,52 @@ class Viewer {
     document.getElementById("show-wrong").addEventListener("change", e => {
       this.folded.showWrong = e.target.checked; this.folded.updateDiagnosticLines();
     });
+    this.setupPairWalk();
+  }
+  // Step through the model one mirror pair at a time, those with the most open glues and
+  // wrong-way folds first; pieces with no twin found come last, on their own.
+  setupPairWalk() {
+    const twins = this.model.findTwins(), seen = new Set();
+    this.pairs = [];
+    for (const piece of [...this.model.facesOf.keys()].sort()) {
+      if (seen.has(piece)) continue;
+      const pair = [piece, twins.get(piece)].filter(Boolean);
+      pair.forEach(p => seen.add(p));
+      this.pairs.push({pieces: pair, unlike: this.model.unlikeTwins.has(piece),
+                       trouble: pair.reduce((sum, p) => sum + this.model.trouble(p), 0)});
+    }
+    // Twins traced unlike each other first, then by open glues and wrong-way folds; lone pieces last.
+    this.pairs.sort((a, b) => (a.pieces.length === 1) - (b.pieces.length === 1) || b.unlike - a.unlike
+      || b.trouble - a.trouble);
+    this.pairAt = 0;
+    const bar = document.getElementById("pair-bar");
+    document.getElementById("pair-walk").addEventListener("click", () => { bar.hidden = false; this.showPair(0); });
+    bar.querySelectorAll("[data-step]").forEach(b => b.addEventListener("click", () => this.showPair(Number(b.dataset.step))));
+    document.getElementById("pair-edit").addEventListener("click", () => {
+      this.menuFace = this.model.facesOf.get(this.pairs[this.pairAt].pieces[0])[0];
+      this.openPieceEditor();
+    });
+    document.getElementById("pair-close").addEventListener("click", () => {
+      bar.hidden = true; this.folded.relatedPieces = [];
+      this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
+    });
+    document.addEventListener("keydown", e => {
+      if (bar.hidden || !this.editor.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
+      const step = {n: 1, N: 1, PageDown: 1, b: -1, B: -1, PageUp: -1}[e.key];
+      if (step) { e.preventDefault(); this.showPair(step); }
+    });
+  }
+  showPair(step) {
+    this.pairAt = (this.pairAt + step + this.pairs.length) % this.pairs.length;
+    const {pieces, trouble, unlike} = this.pairs[this.pairAt], [piece, twin] = pieces;
+    this.folded.relatedPieces = twin ? [twin] : [];
+    this.folded.paint(piece, null); this.pattern.paint(piece, null);
+    this.folded.focusPiece(pieces); this.pattern.focus(piece);
+    this.describe(this.model.faces[this.model.facesOf.get(piece)[0]]);
+    if (twin) this.describe(this.model.faces[this.model.facesOf.get(twin)[0]], true);
+    document.getElementById("pair-label").textContent = `${twin ? "Pair" : "Piece"} ${this.pairAt + 1} of ${this.pairs.length}: `
+      + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${unlike ? "shapes differ · " : ""}`
+      + (trouble ? `${trouble} open glue${trouble === 1 ? "" : "s"} or wrong-way fold${trouble === 1 ? "" : "s"}` : "nothing flagged");
   }
   select(face, from) {
     const f = this.model.faces[face];
@@ -684,11 +799,11 @@ class Viewer {
     this.editor.hidden = true;
     this.editorFrame.src = "about:blank";
   }
-  describe(f) {
+  describe(f, append = false) {
     const piece = this.model.pieces[f.piece];
     const glues = this.model.gluesOf(f.piece).sort((a, b) => this.model.isOpen(b) - this.model.isOpen(a) || b.gap_mm - a.gap_mm);
     const info = document.getElementById("info");
-    info.innerHTML = "";
+    if (!append) info.innerHTML = "";
     const h = document.createElement("h2");
     const faceIndex = this.model.faces.indexOf(f);
     h.textContent = `${f.piece} · face ${f.id.split("/")[1]} · ${this.model.isTab(faceIndex) ? "tab · white" : `${piece.material} cardstock`}`;
