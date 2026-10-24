@@ -730,9 +730,17 @@ class Viewer {
       this.pairs.push({pieces: pair, unlike: this.model.unlikeTwins.has(piece),
                        trouble: pair.reduce((sum, p) => sum + this.model.trouble(p), 0)});
     }
-    // Twins traced unlike each other first, then by open glues and wrong-way folds; lone pieces last.
-    this.pairs.sort((a, b) => (a.pieces.length === 1) - (b.pieces.length === 1) || b.unlike - a.unlike
-      || b.trouble - a.trouble);
+    // Pairs the fold left for a person to judge come first, cardstock colours with the least to judge
+    // first; then twins traced unlike each other, then by open glues and wrong-way folds; lone pieces last.
+    const judge = p => (this.model.pieces[p]?.review || []).length, work = new Map();
+    for (const pair of this.pairs) {
+      pair.judge = pair.pieces.reduce((sum, p) => sum + judge(p), 0);
+      const m = this.model.pieces[pair.pieces[0]]?.material || "";
+      work.set(m, (work.get(m) || 0) + pair.judge);
+    }
+    const rank = pair => pair.judge ? work.get(this.model.pieces[pair.pieces[0]]?.material || "") : Infinity;
+    this.pairs.sort((a, b) => rank(a) - rank(b) || (a.pieces.length === 1) - (b.pieces.length === 1)
+      || b.unlike - a.unlike || b.trouble - a.trouble);
     this.pairAt = 0;
     const bar = document.getElementById("pair-bar");
     document.getElementById("pair-walk").addEventListener("click", () => { bar.hidden = false; this.showPair(0); });
@@ -753,14 +761,14 @@ class Viewer {
   }
   showPair(step) {
     this.pairAt = (this.pairAt + step + this.pairs.length) % this.pairs.length;
-    const {pieces, trouble, unlike} = this.pairs[this.pairAt], [piece, twin] = pieces;
+    const {pieces, trouble, unlike, judge} = this.pairs[this.pairAt], [piece, twin] = pieces;
     this.folded.relatedPieces = twin ? [twin] : [];
     this.folded.paint(piece, null); this.pattern.paint(piece, null);
     this.folded.focusPiece(pieces); this.pattern.focus(piece);
     this.describe(this.model.faces[this.model.facesOf.get(piece)[0]]);
     if (twin) this.describe(this.model.faces[this.model.facesOf.get(twin)[0]], true);
     document.getElementById("pair-label").textContent = `${twin ? "Pair" : "Piece"} ${this.pairAt + 1} of ${this.pairs.length}: `
-      + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${unlike ? "shapes differ · " : ""}`
+      + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${judge ? `${judge} for you to judge (${this.model.pieces[piece]?.material}) · ` : ""}${unlike ? "shapes differ · " : ""}`
       + (trouble ? `${trouble} open glue${trouble === 1 ? "" : "s"} or wrong-way fold${trouble === 1 ? "" : "s"}` : "nothing flagged");
   }
   select(face, from) {
@@ -808,6 +816,9 @@ class Viewer {
     const faceIndex = this.model.faces.indexOf(f);
     h.textContent = `${f.piece} · face ${f.id.split("/")[1]} · ${this.model.isTab(faceIndex) ? "tab · white" : `${piece.material} cardstock`}`;
     info.append(h);
+    for (const note of piece.review || []) {
+      const p = document.createElement("div"); p.className = "note"; p.textContent = `To judge: ${note}`; info.append(p);
+    }
     if (piece.inspect) {
       const p = document.createElement("div"); p.className = "note"; p.textContent = `To check: ${piece.inspect}`; info.append(p);
     }

@@ -951,8 +951,10 @@ class MirrorTwins:
 
     @staticmethod
     def _match(p: np.ndarray, q: np.ndarray):
-        """Corner pairs laying p mirrored onto q (rotation after a reflection, no scale), or None."""
-        if len(p) != len(q) or len(p) < 3:
+        """Corner pairs laying p mirrored onto q (rotation after a reflection, no scale), or None.
+        The twins may differ by a corner or two the trace added or missed on one side: corners
+        pair only with their mutual nearest, and all but two of the smaller side's must pair."""
+        if min(len(p), len(q)) < 3 or abs(len(p) - len(q)) > 2:
             return None
         p = p * [-1, 1]
         cp, cq = p.mean(0), q.mean(0)
@@ -972,11 +974,12 @@ class MirrorTwins:
                 moved = (p - src.mean(0)) @ rotation + dst.mean(0)
             d = np.linalg.norm(moved[:, None] - q[None], axis=2)
             j = d.argmin(1)
-            if len(set(j)) != len(j):
+            pairs = [(i, k) for i, k in enumerate(j) if d[:, k].argmin() == i]
+            if len(pairs) < min(len(p), len(q)) - 2:
                 continue
-            rms = float(np.sqrt((d[np.arange(len(p)), j] ** 2).mean()))
-            if best is None or rms < best[0]:
-                best = (rms, list(enumerate(j)))
+            rms = float(np.sqrt(np.mean([d[i, k] ** 2 for i, k in pairs])))
+            if best is None or (len(pairs), -rms) > (len(best[1]), -best[0]):
+                best = (rms, pairs)
         return best if best and best[0] <= MIRROR_FIT_MM else None
 
     def ties(self) -> np.ndarray:
@@ -1686,7 +1689,9 @@ class Reconstruction:
         self._csv(out / "fold3d-glue.csv", rows, ["number", "piece", "tab_piece", "length_mm", "length_diff_mm",
                                                   "gap_mm", "look_alike", "status", "stage"])
         self._preview(out / "fold3d.png", x)
-        self._viewer_json(out / "fold3d.json", x, rows)
+        review = self._review(rows)
+        self._csv(out / "fold3d-review.csv", review, ["order", "material", "piece", "twin", "what", "detail"])
+        self._viewer_json(out / "fold3d.json", x, rows, review)
         moves, inspect = CornerAdjuster(self).rows()
         moves = CornerAdjuster.carry(out / "fold3d-moves.csv", moves)
         self._csv(out / "fold3d-moves.csv", moves,
@@ -1791,7 +1796,58 @@ class Reconstruction:
         x = x @ vt.T
         return x[:, [1, 2, 0]]
 
-    def _viewer_json(self, path: Path, x: np.ndarray, rows: list[dict]) -> None:
+    def _review(self, rows: list[dict]) -> list[dict]:
+        """What the automatic fixes left for a person to judge: numbered glues that stay open and
+        twin pairs that do not fold mirrored. A glue's mirror glue (from mirror-mismatches.csv)
+        tells which: both open means the fold is off on both sides alike; only this one open means
+        its number or a fold on this side is suspect. Cardstock colours come least work first."""
+        mirror, twin_of = {}, {}
+        path = self.svg.with_name("mirror-mismatches.csv")
+        if path.is_file():
+            with path.open(newline="", encoding="utf-8") as handle:
+                for r in csv.DictReader(handle):
+                    mirror[r["number"]], mirror[r["twin_number"]] = r["twin_number"], r["number"]
+                    twin_of[r["piece"]], twin_of[r["twin"]] = r["twin"], r["piece"]
+        status = {r["number"]: r for r in rows}
+        material = {pid: piece.material for pid, piece in self.asm.pieces.items()}
+        closed = ("closes", "proposed, closes")
+        items = []
+        for r in rows:
+            if r["status"] in closed or r["status"].startswith("proposed by shape"):
+                continue
+            other = status.get(mirror.get(r["number"], ""))
+            if other is None:
+                why = "no mirror glue found"
+            elif other["status"] in closed:
+                why = f"its mirror glue {other['number']} closes: check this number or a fold on this side"
+            else:
+                why = f"its mirror glue {other['number']} is open too: the fold is off on both sides"
+            items.append({"material": material.get(r["piece"], ""), "piece": r["piece"],
+                          "twin": twin_of.get(r["piece"], ""), "what": "glue",
+                          "detail": f"glue {r['number']} to {r['tab_piece']} ({material.get(r['tab_piece'], '')}) "
+                                    f"{r['status']}, {r['gap_mm']} mm apart; {why}"})
+        tied = {}
+        if getattr(self, "twins", None):
+            off = self.twins.asymmetry(self.x, self.solver.reflect)
+            tied = {a: (b, o) for (a, b), o in zip(self.twins.pairs, off)}
+        for a, b in sorted({tuple(sorted(p)) for p in twin_of.items()}):
+            if a not in material or b not in material:
+                continue
+            if a not in tied:
+                detail = "twins not tied: their surface corners do not mirror on the flat pattern"
+            elif tied[a][1] > 2:
+                detail = f"twins fold {tied[a][1]:.1f} mm from mirrored"
+            else:
+                continue
+            items.append({"material": material[a], "piece": a, "twin": b, "what": "mirror", "detail": detail})
+        work = collections.Counter(item["material"] for item in items)
+        rank = {m: k for k, m in enumerate(sorted(work, key=lambda m: (work[m], m)), 1)}
+        items.sort(key=lambda item: (rank[item["material"]], item["piece"], item["what"]))
+        for item in items:
+            item["order"] = rank[item["material"]]
+        return items
+
+    def _viewer_json(self, path: Path, x: np.ndarray, rows: list[dict], review: list[dict] = ()) -> None:
         """Everything app/fold3d-viewer.html draws, with ids that stay put between the 3D model and
         the pattern: face `piece-PP-NN/k` is the k-th face of that piece group in the SVG (the index tab marks use),
         with its corners both folded (vertex ids) and flat (document mm, as the SVG draws them)."""
@@ -1816,13 +1872,17 @@ class Reconstruction:
                           "gap_mm": round(float(gaps[k]), 1), "status": r["status"]})
         wrong = self.solver.wrong_folds(self.x)
         inspect = {row["piece"]: row["reason"] for row in CornerAdjuster(self).rows()[1]}
+        notes = collections.defaultdict(list)
+        for item in review:
+            notes[item["piece"]].append(item["detail"])
         twin = {}
         for a, b in MirrorTwins.read(self.svg.with_name("mirror-mismatches.csv")):
             twin[a], twin[b] = b, a
         data = {"source": self.svg.name, "units": "mm",
                 "vertices": [[round(float(c), 2) for c in p] for p in x],
                 "pieces": {pid: {"material": piece.material, "inspect": inspect.get(pid, ""),
-                                      **({"twin": twin[pid]} if pid in twin else {})}
+                                      **({"twin": twin[pid]} if pid in twin else {}),
+                                      **({"review": notes[pid]} if pid in notes else {})}
                            for pid, piece in self.asm.pieces.items()},
                 "faces": faces, "glues": glues,
                 "wrong_folds": [[int(h[0]), int(h[1])] for h in self.solver.hinge[wrong]],
