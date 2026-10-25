@@ -400,11 +400,14 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
     def fits(size: float, at_: float, side, inside: bool = True):
         """Centre of a label of this size at `at_` along the edge, on this side, that fits, or None."""
         sx_, sy_, depth = side
-        half_w, half_h = 0.6 * size * chars / 2, 0.4 * size
+        on_tab = tab and depth and side is sides[0]
+        # On a narrow tab the box is the pen's cap height (0.75 of the size) with 0.2 mm to spare,
+        # so the label still fits between the fold and the tab's edge (Helga: 4L below its line).
+        half_w, half_h = 0.6 * size * chars / 2, (0.375 if on_tab else 0.4) * size
         px, py = ax + (bx - ax) * at_, ay + (by - ay) * at_
-        start = max(half_h + 0.5, depth / 2) if tab and depth and side is sides[0] else half_h + 0.5
+        start = max(half_h + 0.2, depth / 2) if on_tab else half_h + 0.5
         for step in range(16):
-            d = start + 0.25 * step
+            d = start + 0.25 * step if not on_tab or step < 8 else half_h + 0.2 + 0.25 * (step - 8)
             cx, cy = px + sx_ * d, py + sy_ * d
             corners = [(cx + kx * ux * half_w + ky * sx_ * half_h, cy + kx * uy * half_w + ky * sy_ * half_h)
                        for kx in (-1, 1) for ky in (-1, 1)]
