@@ -25,7 +25,8 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body { display: grid; grid-template-rows: auto 1fr auto; }
+  body { display: grid; grid-template-rows: auto auto 1fr auto; }
+  body > header { grid-row: 1; } body > main { grid-row: 3; } body > footer { grid-row: 4; }
   header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; padding: 10px 16px;
     border-bottom: 1px solid var(--line); }
   header h1 { font-size: 16px; margin: 0; }
@@ -37,8 +38,12 @@
   .tint-control { display: inline-flex; align-items: center; gap: 7px; }
   .tint-control input { width: 105px; padding: 0; }
   #tab-rebuild-progress { width: 150px; height: 12px; accent-color: var(--pick); vertical-align: middle; }
-  main { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
-  @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+  main { display: grid; grid-template-columns: var(--left, 1fr) 10px minmax(0, 1fr); min-height: 0; }
+  #split { position: relative; cursor: col-resize; background: var(--line); touch-action: none; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; gap: 6px; z-index: 5; }
+  #split button { width: 18px; height: 28px; padding: 0; font-size: 11px; line-height: 1; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } #split { display: none; } }
   .pane { position: relative; min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--line); }
   #three canvas { display: block; width: 100%; height: 100%; }
   #orbit-pad { position: absolute; left: 10px; top: 10px; z-index: 2; display: grid;
@@ -47,8 +52,8 @@
   #orbit-pad button { border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--panel) 88%, transparent);
     color: var(--ink); font: 18px/1 system-ui, sans-serif; cursor: pointer; }
   #orbit-pad button:hover { background: var(--panel); }
-  #pair-bar { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 3; display: flex; flex-wrap: wrap;
-    align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px;
+  #pair-bar { grid-row: 2; display: flex; flex-wrap: wrap;
+    align-items: center; gap: 6px 8px; padding: 6px 16px; border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--panel) 92%, transparent); color: var(--ink); }
   #pair-bar[hidden] { display: none; }
   #pair-bar button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
@@ -110,15 +115,15 @@
   <label><input type="checkbox" id="show-open" checked> <span class="open">open glues</span></label>
   <label><input type="checkbox" id="show-wrong" checked> <span class="wrong">folds bent the wrong way</span></label>
 </header>
+<div id="pair-bar" role="toolbar" aria-label="Mirror pairs" hidden>
+  <button type="button" data-step="-1" title="Previous pair (B)">◀ Back</button>
+  <span id="pair-label"></span>
+  <button type="button" data-step="1" title="Next pair (N)">Next ▶</button>
+  <button type="button" id="pair-edit">Edit pair…</button>
+  <button type="button" id="pair-close" aria-label="Stop stepping through pairs">✕</button>
+</div>
 <main>
   <div class="pane" id="three">
-    <div id="pair-bar" role="toolbar" aria-label="Mirror pairs" hidden>
-      <button type="button" data-step="-1" title="Previous pair (B)">◀ Back</button>
-      <span id="pair-label"></span>
-      <button type="button" data-step="1" title="Next pair (N)">Next ▶</button>
-      <button type="button" id="pair-edit">Edit pair…</button>
-      <button type="button" id="pair-close" aria-label="Stop stepping through pairs">✕</button>
-    </div>
     <div id="orbit-pad" aria-label="Rotate model">
       <span></span><button type="button" data-turn="up" aria-label="Rotate up" title="Rotate up">↑</button><span></span>
       <button type="button" data-turn="left" aria-label="Rotate left" title="Rotate left">←</button>
@@ -126,6 +131,11 @@
       <button type="button" data-turn="right" aria-label="Rotate right" title="Rotate right">→</button>
     </div>
     <div class="hint">drag to turn · right-drag to pan · scroll to zoom · arrow keys rotate · Shift + arrows pan · click a face</div>
+  </div>
+  <div id="split" role="separator" aria-orientation="vertical" title="Drag to move the split between the 3D model and the pattern">
+    <button type="button" data-collapse="three" title="Hide the 3D model (pattern and piece editor full width)">◀</button>
+    <button type="button" data-collapse="even" title="Split evenly">⇔</button>
+    <button type="button" data-collapse="pattern" title="Hide the pattern (3D model full width)">▶</button>
   </div>
   <div class="pane" id="pattern"><div class="hint">drag to pan · scroll to zoom · click a face</div>
     <section id="piece-editor" role="dialog" aria-modal="false" aria-labelledby="piece-editor-title" hidden>
@@ -146,6 +156,30 @@
 </div>
 
 <script type="module">
+// The split between the 3D model and the pattern (where the piece editor opens): drag it, or
+// collapse either side with its buttons; the place is remembered.
+{
+  const main = document.querySelector("main"), split = document.getElementById("split");
+  const place = left => {
+    main.style.setProperty("--left", left);
+    try { localStorage.setItem("fold3d-split", left); } catch (e) {}
+  };
+  try { const saved = localStorage.getItem("fold3d-split"); if (saved) main.style.setProperty("--left", saved); } catch (e) {}
+  let drag = null;
+  split.addEventListener("pointerdown", e => {
+    if (e.target.closest("button")) return;
+    drag = e.pointerId; split.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  split.addEventListener("pointermove", e => {
+    if (drag === null) return;
+    const box = main.getBoundingClientRect();
+    const left = Math.max(0, Math.min(box.width - 10, e.clientX - box.left - 5));
+    place(`${(100 * left / box.width).toFixed(1)}%`);
+  });
+  split.addEventListener("pointerup", () => { drag = null; });
+  split.querySelectorAll("[data-collapse]").forEach(b => b.addEventListener("click", () =>
+    place({three: "0px", even: "1fr", pattern: "calc(100% - 10px)"}[b.dataset.collapse])));
+}
 import * as THREE from "three";
 import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 
