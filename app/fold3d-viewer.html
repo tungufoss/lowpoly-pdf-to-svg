@@ -105,6 +105,8 @@
   <h1 id="title">Folded model</h1>
   <span class="stats" id="stats"></span>
   <button id="fit-view" type="button">Overview</button>
+  <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477 or 11-02"
+    aria-label="Find a glue number or a piece" title="A glue number shows both pieces it joins; a piece id shows that piece and its twin"></form>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
   <button id="save-tabs" type="button" disabled title="Mark a face as a tab to enable this">Save tab marks &amp; re-glue</button>
@@ -773,6 +775,7 @@ class Viewer {
       this.folded.showWrong = e.target.checked; this.folded.updateDiagnosticLines();
     });
     this.setupPairWalk();
+    this.setupFind();
   }
   // Step through the model one mirror pair at a time, those with the most open glues and
   // wrong-way folds first; pieces with no twin found come last, on their own.
@@ -820,6 +823,40 @@ class Viewer {
       if (bar.hidden || !this.editor.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
       const step = {n: 1, N: 1, PageDown: 1, b: -1, B: -1, PageUp: -1}[e.key];
       if (step) { e.preventDefault(); this.showPair(step); }
+    });
+  }
+  // Find a glue by its number (both pieces it joins) or a piece by its id (with its twin).
+  setupFind() {
+    const input = document.getElementById("find-text");
+    document.getElementById("find").addEventListener("submit", e => {
+      e.preventDefault();
+      const text = input.value.trim().toLowerCase();
+      if (!text) return;
+      const id = text.match(/^(?:piece-)?(\d\d)-(\d\d)$/), piece = id && `piece-${id[1]}-${id[2]}`;
+      let pieces = [], glue = null;
+      if (piece && this.model.facesOf.has(piece)) {
+        pieces = [piece, this.model.pieces[piece]?.twin].filter(p => p && this.model.facesOf.has(p));
+      } else {
+        glue = this.model.glues.find(g => String(g.number).toLowerCase() === text);
+        if (glue) pieces = [glue.piece, glue.tab_piece];
+      }
+      if (!pieces.length) {
+        document.getElementById("viewer-status").textContent = `Nothing called ${input.value.trim()}.`;
+        return;
+      }
+      const [first, other] = pieces;
+      const filter = document.getElementById("material-filter");
+      if (filter.value && pieces.some(p => this.model.pieces[p]?.material !== filter.value)) {
+        filter.value = ""; filter.dispatchEvent(new Event("change"));
+      }
+      this.folded.relatedPieces = other ? [other] : [];
+      this.folded.paint(first, null); this.pattern.paint(first, null);
+      this.folded.focusPiece(pieces); this.pattern.focus(first);
+      this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
+      if (other) this.describe(this.model.faces[this.model.facesOf.get(other)[0]], true);
+      document.getElementById("viewer-status").textContent = glue
+        ? `Glue ${glue.number}: ${glue.piece} (edge) ↔ ${glue.tab_piece} (tab), ${glue.status}, ${glue.gap_mm} mm`
+        : `${first}${other ? ` and its twin ${other}` : ""}`;
     });
   }
   showPair(step) {
