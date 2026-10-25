@@ -121,6 +121,7 @@
   <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477, 2T, or 11-02"
     aria-label="Find a glue number, Cricut label, or piece" title="A Cricut label or glue number finds its paired pieces; a piece id shows that piece and its twin"></form>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
+  <label>Needs inspection <select id="inspection-list" aria-label="Needs inspection" style="max-width:32em"><option value="">Choose an issue…</option></select></label>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
   <label>3D numbers <select id="number-label-view" aria-label="3D number labels">
     <option value="glue">Inside markers (Labels switch)</option><option value="cricut">Cricut labels on the faces</option><option value="ocr">OCR numbers on the faces</option>
@@ -1277,6 +1278,7 @@ class Viewer {
     });
     this.setupPairWalk();
     this.setupFind();
+    this.setupInspection();
     this.setupLabels(exportText);
   }
   // PDF numbers or Cricut labels, on the pattern and in 3D. Cricut labels need the export SVG.
@@ -1350,6 +1352,49 @@ class Viewer {
       if (bar.hidden || !this.editor.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
       const step = {n: 1, N: 1, PageDown: 1, b: -1, B: -1, PageUp: -1}[e.key];
       if (step) { e.preventDefault(); this.showPair(step); }
+    });
+  }
+  setupInspection() {
+    const select = document.getElementById("inspection-list"), issues = [];
+    const short = piece => piece.replace(/^piece-/, "");
+    const addGroup = (label, entries) => {
+      if (!entries.length) return;
+      const group = document.createElement("optgroup"); group.label = `${label} (${entries.length})`;
+      for (const entry of entries) {
+        const option = document.createElement("option");
+        option.value = String(issues.length); option.textContent = entry.label;
+        issues.push(entry); group.append(option);
+      }
+      select.append(group);
+    };
+    const glues = this.model.glues.filter(g => this.model.isOpen(g)).sort((a, b) => b.gap_mm - a.gap_mm);
+    const glueEntry = g => ({pieces: [...new Set([g.piece, g.tab_piece])], glue: g,
+      label: `${g.number}: ${short(g.piece)} ↔ ${short(g.tab_piece)} · ${g.gap_mm} mm`,
+      reason: `Glue ${g.number}: ${g.status}, gap ${g.gap_mm} mm`});
+    addGroup("Open joins", glues.filter(g => !g.status.startsWith("proposed")).map(glueEntry));
+    addGroup("Piece shape / corner issues", Object.entries(this.model.pieces)
+      .filter(([piece, data]) => data.inspect && this.model.facesOf.has(piece))
+      .map(([piece, data]) => ({pieces: [piece, data.twin].filter(p => p && this.model.facesOf.has(p)),
+        label: `${short(piece)} · ${data.inspect}`, reason: `${piece}: ${data.inspect}`})));
+    addGroup("Unconfirmed joins", glues.filter(g => g.status.startsWith("proposed")).map(glueEntry));
+    select.disabled = !issues.length;
+    if (!issues.length) select.options[0].textContent = "Nothing flagged";
+    select.addEventListener("change", () => {
+      if (select.value === "") return;
+      const issue = issues[Number(select.value)], [first, ...others] = issue.pieces;
+      const filter = document.getElementById("material-filter");
+      if (filter.value && issue.pieces.some(p => this.model.pieces[p]?.material !== filter.value)) {
+        filter.value = ""; filter.dispatchEvent(new Event("change"));
+      }
+      document.getElementById("pair-bar").hidden = true;
+      document.getElementById("find-text").value = "";
+      this.folded.relatedPieces = others; this.pattern.only = new Set(issue.pieces);
+      this.folded.paint(first, null); this.pattern.paint(first, null);
+      this.folded.focusPiece(issue.pieces);
+      this.pattern.showCrops(issue.pieces, issue.glue || null, issue.reason);
+      this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
+      for (const piece of others) this.describe(this.model.faces[this.model.facesOf.get(piece)[0]], true);
+      document.getElementById("viewer-status").textContent = issue.reason;
     });
   }
   // Find a Cricut label, glue by its number, or piece by its id.
