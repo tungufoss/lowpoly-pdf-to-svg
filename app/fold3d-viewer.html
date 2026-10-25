@@ -127,6 +127,7 @@
   </select></label>
   <button id="save-tabs" type="button" disabled title="Mark a face as a tab to enable this">Save tab marks &amp; re-glue</button>
   <progress id="tab-rebuild-progress" aria-label="Re-glue progress" hidden></progress>
+  <button id="recut-run" type="button" hidden title="Cut the pieces marked for recut again on fresh sheets (make recut) and open the Cricut upload">Make recut</button>
   <label class="tint-control">Cardstock tint <input type="range" id="cardstock-tint" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
   <span class="stats" id="viewer-status" aria-live="polite">Right-click a face to edit it or mark it as a tab.</span>
   <label title="PDF: the numbers read from the template. Cricut: the short labels and piece numbers the pen draws (from the export)">Labels
@@ -177,6 +178,7 @@
   <button type="button" data-tab="true" role="menuitem">Mark as tab · show white</button>
   <button type="button" data-tab="false" role="menuitem">Mark as surface</button>
   <button type="button" data-tab="auto" role="menuitem">Use automatic mark</button>
+  <button type="button" data-recut role="menuitem">Recut this piece</button>
 </div>
 
 <script type="module">
@@ -228,6 +230,7 @@ class Model {
     this.tabStorageKey = `fold3d-tab-overrides:${jsonUrl}`;
     try { this.tabOverrides = new Map(Object.entries(JSON.parse(localStorage.getItem(this.tabStorageKey) || "{}"))); }
     catch { this.tabOverrides = new Map(); }
+    this.recut = new Set();  // piece ids marked for recut (filled by the viewer from recut.txt)
     this.tabDirty = this.tabOverrides.size > 0;
   }
   gluesOf(piece) { return this.glues.filter(g => g.piece === piece || g.tab_piece === piece); }
@@ -653,9 +656,10 @@ class FoldedView {
       }
     }
     const c = this.mesh.geometry.attributes.color, ci = this.inner.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
-    const white = new THREE.Color(0xffffff), tintMix = 1 - this.backTint / 100;
+    const white = new THREE.Color(0xffffff), tintMix = 1 - this.backTint / 100, recut = new THREE.Color(0xd1495b);
     this.triFace.forEach((f, t) => {
       let colour = this.base[f].clone();
+      if (this.model.recut.has(this.model.faces[f].piece)) colour.lerp(recut, 0.7);
       if (f === face || relatedFaces.has(f)) colour = pick.clone();
       else if (piece && this.model.faces[f].piece === piece) colour.lerp(pick, 0.45);
       else if (this.relatedPieces?.includes(this.model.faces[f].piece)) colour.lerp(pick, 0.45);
@@ -1234,6 +1238,11 @@ class Viewer {
         this.openPieceEditor();
         return;
       }
+      if (e.target.closest("[data-recut]") && this.menuFace !== null) {
+        this.faceMenu.hidden = true;
+        this.toggleRecut(this.model.faces[this.menuFace].piece);
+        return;
+      }
       const button = e.target.closest("[data-tab]");
       if (!button || this.menuFace === null) return;
       const value = button.dataset.tab === "auto" ? "auto" : button.dataset.tab === "true";
@@ -1250,6 +1259,7 @@ class Viewer {
     this.editor = document.getElementById("piece-editor");
     this.editorFrame = document.getElementById("piece-editor-frame");
     this.reviewOrigin = `${location.protocol}//${location.hostname}:${params.get("reviewPort") || "8765"}`;
+    this.listenRecut();
     document.getElementById("close-piece-editor").addEventListener("click", () => this.closePieceEditor());
     this.editor.addEventListener("click", e => { if (e.target === this.editor) this.closePieceEditor(); });
     document.addEventListener("keydown", e => { if (e.key === "Escape" && !this.editor.hidden) this.closePieceEditor(); });
@@ -1428,6 +1438,46 @@ class Viewer {
     if (from === "3d" || from === "svg")
       window.parent.postMessage({type: "fold3d-select-piece", piece: f.piece}, location.origin);
   }
+  // Pieces to cut again: right-click > Recut this piece marks them red in 3D; the list is data/<model>/recut.txt,
+  // kept by the review server, and "Make recut" runs make recut there for a Cricut upload of just those pieces.
+  async listenRecut() {
+    const button = document.getElementById("recut-run"), status = document.getElementById("viewer-status");
+    this.recutKey = `fold3d-recut:${jsonUrl}`;
+    try {
+      const response = await fetch(`${this.reviewOrigin}/api/recut?model=${encodeURIComponent(modelName)}`);
+      if (!response.ok) throw new Error(response.status);
+      this.model.recut = new Set((await response.json()).pieces);
+    } catch { this.model.recut = new Set(JSON.parse(localStorage.getItem(this.recutKey) || "[]")); }
+    this.showRecut();
+    button.addEventListener("click", async () => {
+      button.disabled = true; status.textContent = `Making the recut sheets for ${this.model.recut.size} piece(s)…`;
+      try {
+        const result = await this.saveRecut(true);
+        status.innerHTML = `Recut sheets ready: <a href="${this.reviewOrigin}${result.upload}" target="_blank">open the Cricut upload</a>`;
+      } catch (error) { status.textContent = `Recut failed: ${error.message}`; }
+      button.disabled = false;
+    });
+  }
+  async saveRecut(run = false) {
+    localStorage.setItem(this.recutKey, JSON.stringify([...this.model.recut]));
+    const response = await fetch(`${this.reviewOrigin}/api/recut`, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({model: modelName, pieces: [...this.model.recut], run})});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || response.status);
+    return result;
+  }
+  async toggleRecut(piece) {
+    this.model.recut.has(piece) ? this.model.recut.delete(piece) : this.model.recut.add(piece);
+    this.showRecut();
+    const status = document.getElementById("viewer-status");
+    try { await this.saveRecut(); status.textContent = `${this.model.recut.size} piece(s) marked for recut (saved to recut.txt).`; }
+    catch { status.textContent = "Recut marks saved in this browser only; start the review server (make review) to save recut.txt."; }
+  }
+  showRecut() {
+    const button = document.getElementById("recut-run");
+    button.hidden = !this.model.recut.size; button.textContent = `Make recut (${this.model.recut.size})`;
+    this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
+  }
   showFaceMenu(face, x, y) {
     this.menuFace = face;
     this.select(face, "3d");
@@ -1435,6 +1485,7 @@ class Viewer {
     menu.querySelector('[data-tab="true"]').hidden = isTab;
     menu.querySelector('[data-tab="false"]').hidden = !isTab;
     menu.querySelector('[data-tab="auto"]').hidden = !this.model.tabOverrides.has(f.id);
+    menu.querySelector("[data-recut]").textContent = this.model.recut.has(f.piece) ? "Don't recut this piece" : "Recut this piece";
     menu.hidden = false;
     menu.style.left = `${Math.min(x, innerWidth - menu.offsetWidth - 8)}px`;
     menu.style.top = `${Math.min(y, innerHeight - menu.offsetHeight - 8)}px`;
