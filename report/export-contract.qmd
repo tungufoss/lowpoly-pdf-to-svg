@@ -58,8 +58,8 @@ Coordinates in `d` are absolute, comma-separated pairs; no relative commands, ar
 
 Each label stands centred on the edge it marks (or spread along it when the edge carries two),
 its baseline along the edge, inside the cut outline. A tab label sits on the tab and reads from
-the tab's outer edge, its top towards the fold; if the tab has no room it goes on the piece side
-of the fold. A label whose spot is taken by another label slides along its edge; as a last resort
+the tab's outer edge, its top towards the fold; on a tab too narrow for the font it reaches over the fold
+line, still turned to the tab. A label whose spot is taken by another label slides along its edge; as a last resort
 it may stick out past the outline, but labels never cover each other. Every label has the same
 `font-size`, `--label-size` (default 5 mm); the pen font's cap height is 0.75 of it.
 
