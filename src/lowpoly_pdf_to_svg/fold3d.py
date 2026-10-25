@@ -1935,23 +1935,24 @@ class Reconstruction:
         path.write_text("\n".join(lines) + "\n")
 
     def _upright(self, x: np.ndarray) -> np.ndarray:
-        """The model turned for the preview: left-right across the mirror plane (when there is one),
-        facing the camera on the side its red (mouth) pieces sit, and the gold (horns) side up."""
+        """The model turned for the preview: left-right across the mirror plane (when there is one), the head's
+        hair, horns and horn rings (rust, gold, brown) up from the jaw (red, yellow, white), and the face
+        (red, brown) turned to the camera away from the hair at the back."""
         x = x - x.mean(axis=0)
         n = self.solver.plane[0] if getattr(self, "twins", None) else np.array([1.0, 0.0, 0.0])
 
-        def centre(material: str) -> np.ndarray | None:
-            verts = [v for pid, vs in self.asm.faces if self.asm.pieces[pid].material == material for v in vs]
+        def centre(*materials: str) -> np.ndarray | None:
+            verts = [v for pid, vs in self.asm.faces if self.asm.pieces[pid].material in materials for v in vs]
             return x[verts].mean(axis=0) if verts else None
 
-        forward = np.array([0.0, 1.0, 0.0]) - n[1] * n
-        forward /= np.linalg.norm(forward)
-        mouth, horns = centre("red"), centre("gold")
-        if mouth is not None and float(mouth @ forward) < 0:
-            forward = -forward
-        up = np.cross(n, forward)
-        if horns is not None and float(horns @ up) < 0:
-            up, n = -up, -n
+        top, jaw = centre("gold", "brown", "rust"), centre("red", "yellow", "white")
+        up = (top - jaw) if top is not None and jaw is not None else np.array([0.0, 0.0, 1.0])
+        up = up - (up @ n) * n
+        up /= np.linalg.norm(up)
+        forward = np.cross(n, up)
+        face, hair = centre("red", "brown"), centre("rust")
+        if face is not None and hair is not None and float((face - hair) @ forward) < 0:
+            n, forward = -n, -forward
         return x @ np.c_[n, -forward, up]   # the front view looks along +y, so the face points to -y
 
     def _preview(self, path: Path, x: np.ndarray) -> None:

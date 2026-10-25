@@ -327,13 +327,56 @@ class FoldedView {
     this.triFace.forEach((faceIndex, triangleIndex) => geo.addGroup(triangleIndex * 3, 3,
       this.materialIndex.get(pieces[faces[faceIndex].piece].material)));
     geo.computeVertexNormals();
-    this.meshMaterials = materials.map(() => new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
+    // The cut pieces are used inside out: the printed side (counter-clockwise faces, with the numbers) is the inside
+    // of the model. The outside shows the full cardstock colour, the inside the pale tint with the glue numbers.
+    let volume = 0;
+    for (let i = 0; i < pos.length; i += 9) {
+      const a = new THREE.Vector3(...pos.slice(i, i + 3)), b = new THREE.Vector3(...pos.slice(i + 3, i + 6)),
+        c = new THREE.Vector3(...pos.slice(i + 6, i + 9));
+      volume += a.dot(b.clone().cross(c)) / 6;
+    }
+    const printedInside = volume < 0;
+    const materialFor = side => new THREE.MeshLambertMaterial({ vertexColors: true, side, flatShading: true });
+    const outerSide = printedInside ? THREE.BackSide : THREE.FrontSide, innerSide = printedInside ? THREE.FrontSide : THREE.BackSide;
+    this.meshMaterials = materials.map(() => materialFor(outerSide));
+    this.innerMaterials = materials.map(() => materialFor(innerSide));
     this.mesh = new THREE.Mesh(geo, this.meshMaterials);
-    this.scene.add(this.mesh);
+    const innerGeo = new THREE.BufferGeometry();
+    innerGeo.setAttribute("position", geo.attributes.position);
+    innerGeo.setAttribute("color", new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
+    innerGeo.groups = geo.groups;
+    innerGeo.computeVertexNormals();
+    this.inner = new THREE.Mesh(innerGeo, this.innerMaterials);
+    this.scene.add(this.mesh, this.inner);
+    this.buildNumbers(V);
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
       new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
     this.edges = edges; this.scene.add(edges);
     this.paint(null, null);
+  }
+  // Glue numbers written on the inside of the pieces: seen only from inside, through gaps.
+  buildNumbers(V) {
+    const centre = V.reduce((a, v) => [a[0] + v[0] / V.length, a[1] + v[1] / V.length, a[2] + v[2] / V.length], [0, 0, 0]);
+    this.numbers = new THREE.Group();
+    const size = 64, cache = new Map();
+    for (const g of this.model.glues) {
+      if (!cache.has(g.number)) {
+        const canvas = document.createElement("canvas"); canvas.width = canvas.height = size;
+        const context = canvas.getContext("2d");
+        context.font = "bold 30px sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
+        context.lineWidth = 5; context.strokeStyle = "#fff"; context.strokeText(g.number, size / 2, size / 2);
+        context.fillStyle = "#111"; context.fillText(g.number, size / 2, size / 2);
+        cache.set(g.number, new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
+      }
+      const a = V[g.v[0]], b = V[g.v[1]];
+      const mid = [0, 1, 2].map(i => (a[i] + b[i]) / 2);
+      const towards = new THREE.Vector3(...centre).sub(new THREE.Vector3(...mid)).normalize().multiplyScalar(3);
+      const sprite = new THREE.Sprite(cache.get(g.number));
+      sprite.position.set(...mid).add(towards); sprite.scale.set(7, 7, 1);
+      sprite.userData.materials = new Set([g.piece, g.tab_piece].map(piece => this.model.pieces[piece]?.material).filter(Boolean));
+      this.numbers.add(sprite);
+    }
+    this.scene.add(this.numbers);
   }
   buildLines() {
     const css = getComputedStyle(document.documentElement);
@@ -382,19 +425,23 @@ class FoldedView {
         if (match >= 0) relatedFaces.add(match);
       }
     }
-    const c = this.mesh.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
+    const c = this.mesh.geometry.attributes.color, ci = this.inner.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
     this.triFace.forEach((f, t) => {
       let colour = this.base[f].clone();
       if (f === face || relatedFaces.has(f)) colour = pick.clone();
       else if (piece && this.model.faces[f].piece === piece) colour.lerp(pick, 0.45);
       else if (this.relatedPieces?.includes(this.model.faces[f].piece)) colour.lerp(pick, 0.45);
-      for (let k = 0; k < 3; k++) c.setXYZ(3 * t + k, colour.r, colour.g, colour.b);
+      const pale = colour.clone().lerp(new THREE.Color(0xffffff), 0.45);
+      for (let k = 0; k < 3; k++) {
+        c.setXYZ(3 * t + k, colour.r, colour.g, colour.b);
+        ci.setXYZ(3 * t + k, pale.r, pale.g, pale.b);
+      }
     });
-    c.needsUpdate = true;
+    c.needsUpdate = true; ci.needsUpdate = true;
   }
   // The nearest face the ray meets among the cardstocks shown (hidden ones cannot be clicked).
   visibleHit(ray) {
-    return ray.intersectObject(this.mesh).find(hit => {
+    return ray.intersectObjects([this.mesh, this.inner]).find(hit => {
       const material = this.model.pieces[this.model.faces[this.triFace[hit.faceIndex]].piece]?.material;
       return !this.currentMaterialFilter || material === this.currentMaterialFilter;
     });
@@ -402,6 +449,8 @@ class FoldedView {
   setMaterialFilter(material) {
     this.currentMaterialFilter = material;
     this.meshMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
+    this.innerMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
+    this.numbers.children.forEach(sprite => { sprite.visible = !material || sprite.userData.materials.has(material); });
     this.edges.visible = !material;
     this.updateDiagnosticLines();
     this.fit();
