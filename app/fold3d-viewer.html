@@ -859,6 +859,7 @@ class PatternView {
     el.prepend(this.svg);
     this.full = this.svg.getAttribute("viewBox").split(/[\s,]+/).map(Number);
     this.view = [...this.full];
+    this.alignToSvg();
     this.overlay = document.createElementNS(SVGNS, "g");
     this.pieceGroups = [...this.svg.querySelectorAll('g[id^="piece-"][data-material]')];
     this.pieceGroupsById = new Map(this.pieceGroups.map(group => [group.id, group]));
@@ -879,7 +880,40 @@ class PatternView {
     });
     this.listen();
   }
+  // fold3d.json keeps the flat corners of the run that built it; a later rebuild of the SVG can lay
+  // the pages out elsewhere. Each piece's faces are moved onto that piece's cut outline in the SVG,
+  // so the faces, the crops and the page scans under them line up whatever the layout.
+  alignToSvg() {
+    let moved = 0;
+    for (const [piece, faces] of this.model.facesOf) {
+      const cut = this.svg.querySelectorAll(`g[id="${CSS.escape(piece)}-cut"] path, g[id="${CSS.escape(piece)}-cut"] polygon`);
+      const nums = [...cut].flatMap(n => (n.getAttribute("d") || n.getAttribute("points") || "").match(/-?\d+(?:\.\d+)?(?:e-?\d+)?/gi) || []).map(Number);
+      const outline = []; for (let k = 0; k + 1 < nums.length; k += 2) outline.push([nums[k], nums[k + 1]]);
+      const corners = [...new Map(faces.flatMap(i => this.model.faces[i].flat).map(p => [p.join(","), p])).values()];
+      if (outline.length < 3 || !corners.length) continue;
+      // the shift that puts the most corners on the outline's corners (within 0.6 mm)
+      const hits = ([dx, dy]) => corners.filter(([x, y]) => outline.some(([u, v]) => Math.hypot(u - x - dx, v - y - dy) < 0.6)).length;
+      let best = [0, 0], most = hits(best);
+      if (most >= Math.min(3, outline.length)) continue;
+      for (const [x, y] of corners.slice(0, 4)) for (const [u, v] of outline) {
+        const n = hits([u - x, v - y]);
+        if (n > most) { most = n; best = [u - x, v - y]; }
+      }
+      if (most < 3) continue;
+      for (const i of faces) this.model.faces[i].flat = this.model.faces[i].flat.map(([x, y]) => [x + best[0], y + best[1]]);
+      moved++;
+    }
+    if (moved) console.info(`fold3d viewer: ${moved} pieces moved onto their place in the SVG (fold3d.json is from another layout)`);
+  }
+  // The printed side as the 3D view shows it: the cardstock colour, paled; tabs white.
+  faceTint(i) {
+    if (this.model.isTab(i)) return "#ffffff";
+    const material = this.model.pieces[this.model.faces[i].piece].material;
+    const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3").lerp(new THREE.Color("#ffffff"), 0.45);
+    return `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
+  }
   paint(piece, face) {
+    this.selectedPiece = piece; this.selectedFace = face;
     this.polys.forEach((p, i) => {
       const mine = piece && this.model.faces[i].piece === piece;
       const f = this.model.faces[i];
@@ -898,11 +932,15 @@ class PatternView {
       p.setAttribute("stroke", i === face ? "#1f6feb" : "none");
       p.setAttribute("stroke-width", "0.6");
     });
+    // The cut-out pieces carry the colours of the 3D faces (tabs white) at the tint slider's
+    // strength; only the picked face is blue, so the piece still reads as its cardstock.
+    this.found.querySelectorAll(".crop-outline").forEach(n => { n.style.fillOpacity = String(this.tintStrength / 100); });
     for (const c of this.cropPolys || []) {
-      const p = this.polys[c.dataset.face];
-      for (const a of ["fill", "stroke", "stroke-width"]) c.setAttribute(a, p.getAttribute(a));
-      // lighter than on the pattern, so the numbers on the scan underneath stay readable
-      c.setAttribute("fill-opacity", String(Math.min(0.3, Number(p.getAttribute("fill-opacity")) || 0)));
+      const i = Number(c.dataset.face);
+      c.setAttribute("fill", i === face ? "#1f6feb" : this.faceTint(i));
+      c.setAttribute("fill-opacity", i === face ? "0.45" : String(this.tintStrength / 100));
+      c.setAttribute("stroke", i === face ? "#1f6feb" : "none");
+      c.setAttribute("stroke-width", "0.6");
     }
   }
   // Cricut labels: each piece's Draw group from the export (same ids and coordinates) in place of
@@ -927,6 +965,7 @@ class PatternView {
       draw.style.display = exportDoc && copy ? "none" : "";
       if (copy) copy.style.display = exportDoc ? "" : "none";
     }
+    if (!this.found.hidden && this.lastCrops) this.showCrops(...this.lastCrops);
   }
   setTint(strength) { this.tintStrength = Math.max(0, Math.min(100, Number(strength) || 0)); this.paint(this.selectedPiece, this.selectedFace); }
   fitGroups(groups, padding) {
@@ -974,7 +1013,7 @@ class PatternView {
   // edge is drawn on both pieces. The full pattern comes back with "Show all pages" or a new view.
   showCrops(pieces, glue, label) {
     const box = this.found.querySelector("#found-crops");
-    box.replaceChildren(); this.cropPolys = []; this.cropped = new Set(pieces);
+    box.replaceChildren(); this.cropPolys = []; this.cropped = new Set(pieces); this.lastCrops = [pieces, glue, label];
     const flatOf = (piece, vertex) => {
       for (const i of this.model.facesOf.get(piece) || []) {
         const k = this.model.faces[i].v.indexOf(vertex);
@@ -1007,6 +1046,10 @@ class PatternView {
       if (group) {
         const copy = group.cloneNode(true); copy.style.display = "";
         copy.removeAttribute("id"); copy.querySelectorAll("[id]").forEach(n => n.removeAttribute("id"));
+        // the whole outline white underneath, so tabs read white like on the cardstock
+        copy.querySelectorAll('g[data-operation="cut"] path, g[data-operation="cut"] polygon').forEach(n => {
+          n.classList.add("crop-outline"); n.style.fill = "#ffffff";
+        });
         svg.append(copy);
       }
       for (const i of faces) {
@@ -1376,7 +1419,11 @@ class Viewer {
   select(face, from) {
     const f = this.model.faces[face];
     this.folded.paint(f.piece, face); this.pattern.paint(f.piece, face);
-    if (from === "3d") this.pattern.focus(f.piece); else this.folded.focus(face);
+    // Picked in 3D: the 2D side shows just that piece, cut from its page scan.
+    if (from === "3d") {
+      this.pattern.only = new Set([f.piece]);
+      this.pattern.showCrops([f.piece], null, `${f.piece} · ${this.model.pieces[f.piece]?.material || ""} cardstock`);
+    } else this.folded.focus(face);
     this.describe(f);
     if (from === "3d" || from === "svg")
       window.parent.postMessage({type: "fold3d-select-piece", piece: f.piece}, location.origin);
