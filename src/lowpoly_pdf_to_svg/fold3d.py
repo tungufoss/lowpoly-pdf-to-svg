@@ -38,6 +38,7 @@ LENGTH_TOLERANCE_MM = 1.0  # as edges.py: a clean pair's two lines agree this we
 SNAP_MM = 0.4            # fold ends and outline corners closer than this are one vertex
 SETTLE_MM = 0.5          # a glue still this far open after the rigid join lets its pieces bend
 MIRROR_FIT_MM = 1.0      # twins whose flat surface corners mirror within this (rms) are tied in 3D
+PIN_WEIGHT = 4.0         # a glue pinned by hand pulls this hard (an unpinned glue at most 1)
 MIRROR_WEIGHT = 0.5      # pull of a twin corner onto its partner's mirror image (glue pulls are 1)
 MIRROR_SCALE_MM = 4.0    # a twin pair this far from mirrored pulls a quarter as hard (Cauchy)
 
@@ -394,6 +395,8 @@ class FoldSolver:
         self.gap_scale = gap_scale_mm
         self.robust = np.ones(len(glues))      # Cauchy weight from the last solve
         self.dropped = np.zeros(len(glues), bool)
+        # glues pinned by hand (fold3d-glue-pins.json) always pull at full weight and are never let go
+        self.pinned = np.array([g.number in FoldSolver.pinned_numbers for g in glues], dtype=bool)
         rows = [(int(a), int(b)) for a, b, _ in self.rigid]
         rows += [(int(p), int(q)) for _, p, q in self.glue for _ in range(3)]
         rows += [tuple(int(v) for v in h[:6]) for h in self.hinge] * 2
@@ -401,6 +404,8 @@ class FoldSolver:
         self.mirror = np.empty((0, 3), dtype=np.int64)    # (twin pair, vertex, its mirror vertex)
         self.mirror_weight = np.empty(0)                  # per twin pair
         self.plane = (np.array([1.0, 0.0, 0.0]), 0.0)     # mirror plane n . p = d
+
+    pinned_numbers: frozenset = frozenset()
 
     def set_mirror(self, mirror: np.ndarray, pairs: int) -> None:
         """Tie twin corners: each vertex is pulled onto the mirror image of its partner."""
@@ -416,7 +421,7 @@ class FoldSolver:
 
     @property
     def glue_weight(self) -> np.ndarray:
-        return np.where(self.dropped, 0.0, self.robust)
+        return np.where(self.pinned, PIN_WEIGHT, np.where(self.dropped, 0.0, self.robust))
 
     # residuals ------------------------------------------------------------------
     def _residual_selection(self, rows: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -662,7 +667,7 @@ class Grower:
 
     def _let_go(self, pid: str, x: np.ndarray, placed: set[str]) -> None:
         gaps = self.s.gaps(x)
-        mine = [k for k, o, _ in self.links[pid] if o in placed and not self.s.dropped[k]]
+        mine = [k for k, o, _ in self.links[pid] if o in placed and not self.s.dropped[k] and not self.s.pinned[k]]
         while mine and max(gaps[k] for k in mine) > self.gape:
             worst = max(mine, key=lambda k: gaps[k])
             self.s.dropped[worst] = True
@@ -951,8 +956,10 @@ class MirrorTwins:
 
     @staticmethod
     def _match(p: np.ndarray, q: np.ndarray):
-        """Corner pairs laying p mirrored onto q (rotation after a reflection, no scale), or None."""
-        if len(p) != len(q) or len(p) < 3:
+        """Corner pairs laying p mirrored onto q (rotation after a reflection, no scale), or None.
+        The twins may differ by a corner or two the trace added or missed on one side: corners
+        pair only with their mutual nearest, and all but two of the smaller side's must pair."""
+        if min(len(p), len(q)) < 3 or abs(len(p) - len(q)) > 2:
             return None
         p = p * [-1, 1]
         cp, cq = p.mean(0), q.mean(0)
@@ -972,11 +979,12 @@ class MirrorTwins:
                 moved = (p - src.mean(0)) @ rotation + dst.mean(0)
             d = np.linalg.norm(moved[:, None] - q[None], axis=2)
             j = d.argmin(1)
-            if len(set(j)) != len(j):
+            pairs = [(i, k) for i, k in enumerate(j) if d[:, k].argmin() == i]
+            if len(pairs) < min(len(p), len(q)) - 2:
                 continue
-            rms = float(np.sqrt((d[np.arange(len(p)), j] ** 2).mean()))
-            if best is None or rms < best[0]:
-                best = (rms, list(enumerate(j)))
+            rms = float(np.sqrt(np.mean([d[i, k] ** 2 for i, k in pairs])))
+            if best is None or (len(pairs), -rms) > (len(best[1]), -best[0]):
+                best = (rms, pairs)
         return best if best and best[0] <= MIRROR_FIT_MM else None
 
     def ties(self) -> np.ndarray:
@@ -1025,6 +1033,11 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
         piece.split_faces()
         piece.mark_labels()
         piece.mark_tabs()
+    twins = MirrorTwins.read(svg.with_name("mirror-mismatches.csv"))
+    _tabs_from_twins(pieces, twins)
+    marked = {piece.id: ([face.tab for face in piece.faces], [label.tab for label in piece.labels])
+              for piece in pieces}  # tab marks before the overrides
+    for piece in pieces:
         edge_use = collections.Counter(frozenset(edge) for face in piece.faces for edge in piece.face_edges(face))
         for index, face in enumerate(piece.faces):
             override = tab_overrides.get(f"{piece.id}/{index}")
@@ -1037,7 +1050,77 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
                     centre = np.mean([piece.points[v] for v in face.vertices], axis=0)
                     label = min(labels, key=lambda item: np.linalg.norm(item.centre - centre))
                     label.tab = override
+    _drop_stale_tab_overrides(pieces, marked, twins)
     return pieces
+
+
+def _tabs_from_twins(pieces: list[FlatPiece], twins: list[tuple[str, str]], tol_mm: float = 0.5) -> None:
+    """A flap (a face joined to the rest by one fold) shaped like a tab on the mirror twin is a tab
+    here too, even where its number could not be tied to the fold (e.g. a one-digit number set
+    off the edge)."""
+    by_id = {piece.id: piece for piece in pieces}
+
+    def sides(piece: FlatPiece, face) -> list[float]:
+        return sorted(piece.length(*edge) for edge in piece.face_edges(face))
+
+    for pair in twins:
+        if not all(p in by_id for p in pair):
+            continue
+        for piece, twin in (pair, pair[::-1]):
+            piece, twin = by_id[piece], by_id[twin]
+            shared = collections.Counter(frozenset(e) for f in piece.faces for e in piece.face_edges(f))
+            tabs = [sides(twin, face) for face in twin.faces if face.tab]
+            for index, face in enumerate(piece.faces):
+                folds = [e for e in piece.face_edges(face) if shared[frozenset(e)] == 2]
+                if face.tab or len(folds) != 1:
+                    continue
+                mine = sides(piece, face)
+                if any(len(t) == len(mine) and max(abs(a - b) for a, b in zip(t, mine)) < tol_mm for t in tabs):
+                    face.tab = True
+                    for label in piece.labels:
+                        if label.edge and frozenset(label.edge) == frozenset(folds[0]):
+                            label.tab = True
+                    print(f"{piece.id}/{index}: a tab, like its shape on the mirror twin {twin.id}")
+
+
+def _surface_mm2(piece: FlatPiece) -> float:
+    def area(points: np.ndarray) -> float:
+        x, y = points[:, 0], points[:, 1]
+        return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+    return sum(area(np.asarray([piece.points[v] for v in face.vertices])) for face in piece.faces if not face.tab)
+
+
+def _drop_stale_tab_overrides(pieces: list[FlatPiece], marked: dict, twins: list[tuple[str, str]],
+                              tolerance: float = 0.1) -> None:
+    """Tab overrides are keyed by face index, so a retrace that renumbers a piece's faces sends
+    them to the wrong faces. Twins have the same surface (only tabs may differ), so a piece whose
+    overrides take its surface area away from its twin's, when the automatic marks matched it,
+    goes back to the automatic marks."""
+    by_id = {piece.id: piece for piece in pieces}
+
+    def apart(a: float, b: float) -> float:
+        return abs(a - b) / max(a, b, 1e-9)
+
+    for pair in twins:
+        if not all(p in by_id for p in pair):
+            continue
+        for piece, twin in (pair, pair[::-1]):
+            piece, twin = by_id[piece], by_id[twin]
+            now = [face.tab for face in piece.faces]
+            faces, labels = marked[piece.id]
+            if now == faces:
+                continue
+            with_overrides = apart(_surface_mm2(piece), _surface_mm2(twin))
+            for face, tab in zip(piece.faces, faces):
+                face.tab = tab
+            if with_overrides > tolerance and apart(_surface_mm2(piece), _surface_mm2(twin)) <= tolerance:
+                for label, tab in zip(piece.labels, labels):
+                    label.tab = tab
+                print(f"warning: ignored the tab overrides on {piece.id}: they leave its surface "
+                      f"{100 * with_overrides:.0f}% off its twin {twin.id}'s (face numbers moved?)")
+            else:
+                for face, tab in zip(piece.faces, now):
+                    face.tab = tab
 
 
 class Reconstruction:
@@ -1065,6 +1148,7 @@ class Reconstruction:
             print(f"[{minutes:02d}:{seconds:02d}] {text}", flush=True)
 
     def run(self) -> None:
+        FoldSolver.pinned_numbers = self._pins()
         self.pieces = read_pieces(self.svg)
         self.asm = Assembly(self.pieces)
         glues, status = GlueFinder(self.pieces).find()
@@ -1133,6 +1217,26 @@ class Reconstruction:
                                "pieces": unit.pieces, "vertices": vertices})
         return components
 
+    def _pins(self) -> frozenset:
+        """Glue numbers pinned by hand in fold3d-glue-pins.json (a list of numbers), each with its
+        mirror glue from mirror-mismatches.csv, so a pin keeps the model symmetric."""
+        path = self.svg.with_name("fold3d-glue-pins.json")
+        try:
+            pins = {str(n) for n in json.loads(path.read_text(encoding="utf-8"))}
+        except (OSError, json.JSONDecodeError, TypeError):
+            return frozenset()
+        mirrors = self.svg.with_name("mirror-mismatches.csv")
+        if mirrors.is_file():
+            with mirrors.open(newline="", encoding="utf-8") as handle:
+                for r in csv.DictReader(handle):
+                    if r["number"] in pins:
+                        pins.add(r["twin_number"])
+                    if r["twin_number"] in pins:
+                        pins.add(r["number"])
+        if pins:
+            self.log(f"pinned glues: {', '.join(sorted(pins, key=lambda n: (len(n), n)))}")
+        return frozenset(pins)
+
     def _component_signature(self, component: dict, glues: list[Glue]) -> str:
         selected = set(component["pieces"])
         pieces = []
@@ -1151,7 +1255,9 @@ class Reconstruction:
                     if glue.piece in selected and glue.other in selected]
         payload = {"solver": "same-cardstock-component-v1", "gape": self.gape,
                    "anneal": self.anneal, "fold_weight": 5.0, "smooth_weight": 1.0,
-                   "pieces": pieces, "glues": sorted(internal)}
+                   "pieces": pieces, "glues": sorted(internal),
+                   "pins": sorted(set(FoldSolver.pinned_numbers) & {g.number for g in glues
+                                                                    if g.piece in selected and g.other in selected})}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
@@ -1308,10 +1414,47 @@ class Reconstruction:
             x = solver.solve(x, rounds=1, max_nfev=40, reweight=True)
             solver.plane = twins.plane(x, solver.mirror_weight)
         solver.fold_weight = weight
+        x = self._mirror_snap(solver, twins, x)
         after = twins.asymmetry(x, solver.reflect)
         self.log(f"mirror: median {np.median(after):.1f} mm, {int((after <= 2).sum())} of {len(after)} within 2 mm; "
                  f"{int((solver.gaps(x) <= self.gape).sum())} glues within {self.gape:g} mm")
         return x
+
+    def _mirror_snap(self, solver: FoldSolver, twins: MirrorTwins, x: np.ndarray) -> np.ndarray:
+        """Twins still far from mirrored after the soft pull: lay the side with more open glues
+        exactly onto the mirror image of the other, worst pair first, then let the glue settle
+        with the twins held firmly. Kept only if no more glues gape than before."""
+        off = twins.asymmetry(x, solver.reflect)
+        far = [k for k in np.argsort(-off) if off[k] > 2.0]
+        if not far:
+            return x
+        gaps = solver.gaps(x)
+        before = int((gaps <= self.gape).sum())
+        trouble = collections.Counter()
+        for g, gap in zip(solver.glues, gaps):
+            if gap > self.gape:
+                trouble[g.piece] += 1
+                trouble[g.other] += 1
+        y = x.copy()
+        for k in far:
+            a, b = twins.pairs[k]
+            match = twins.matches[k]
+            if trouble[a] < trouble[b]:
+                y[[j for _, j in match]] = solver.reflect(y[[i for i, _ in match]])
+            else:
+                y[[i for i, _ in match]] = solver.reflect(y[[j for _, j in match]])
+        weight, solver.fold_weight = solver.fold_weight, 4 * solver.fold_weight
+        solver.mirror_weight = np.full(len(twins.pairs), 4 * MIRROR_WEIGHT)
+        y = solver.solve(y, rounds=2, max_nfev=60, reweight=True)
+        solver.fold_weight = weight
+        after = int((solver.gaps(y) <= self.gape).sum())
+        moved = ", ".join(f"{twins.pairs[k][0][6:]}/{twins.pairs[k][1][6:]}" for k in far)
+        if after < before:
+            self.log(f"mirror snap: {len(far)} pairs ({moved}) laid mirrored would close {after} glues "
+                     f"instead of {before}; kept the soft pull")
+            return x
+        self.log(f"mirror snap: {len(far)} pairs ({moved}) laid exactly mirrored; {after} glues close (was {before})")
+        return y
 
     def _changed_units(self, components: list[dict], component_by_piece: dict, rebuilt: set[int]) -> set[int] | None:
         """Units rebuilt this run plus units whose glues to other units changed since the saved
@@ -1553,6 +1696,8 @@ class Reconstruction:
             proposed = k in self.proposed
             if proposed and _look_alike(g.number) != "yes":
                 status = "proposed by shape only, not glued"
+            elif self.solver.pinned[k]:
+                status = "closes" if gaps[k] <= self.gape else "does not close"
             elif self.solver.dropped[k]:
                 status = "proposed, did not close" if proposed else (
                     "let go while building" if k < len(self.grown_dropped) and self.grown_dropped[k] else "does not close")
@@ -1574,7 +1719,9 @@ class Reconstruction:
         self._csv(out / "fold3d-glue.csv", rows, ["number", "piece", "tab_piece", "length_mm", "length_diff_mm",
                                                   "gap_mm", "look_alike", "status", "stage"])
         self._preview(out / "fold3d.png", x)
-        self._viewer_json(out / "fold3d.json", x, rows)
+        review = self._review(rows)
+        self._csv(out / "fold3d-review.csv", review, ["order", "material", "piece", "twin", "what", "detail"])
+        self._viewer_json(out / "fold3d.json", x, rows, review)
         moves, inspect = CornerAdjuster(self).rows()
         moves = CornerAdjuster.carry(out / "fold3d-moves.csv", moves)
         self._csv(out / "fold3d-moves.csv", moves,
@@ -1714,7 +1861,58 @@ class Reconstruction:
             up = -up
         return x @ np.array([np.cross(up, front), up, front]).T
 
-    def _viewer_json(self, path: Path, x: np.ndarray, rows: list[dict]) -> None:
+    def _review(self, rows: list[dict]) -> list[dict]:
+        """What the automatic fixes left for a person to judge: numbered glues that stay open and
+        twin pairs that do not fold mirrored. A glue's mirror glue (from mirror-mismatches.csv)
+        tells which: both open means the fold is off on both sides alike; only this one open means
+        its number or a fold on this side is suspect. Cardstock colours come least work first."""
+        mirror, twin_of = {}, {}
+        path = self.svg.with_name("mirror-mismatches.csv")
+        if path.is_file():
+            with path.open(newline="", encoding="utf-8") as handle:
+                for r in csv.DictReader(handle):
+                    mirror[r["number"]], mirror[r["twin_number"]] = r["twin_number"], r["number"]
+                    twin_of[r["piece"]], twin_of[r["twin"]] = r["twin"], r["piece"]
+        status = {r["number"]: r for r in rows}
+        material = {pid: piece.material for pid, piece in self.asm.pieces.items()}
+        closed = ("closes", "proposed, closes")
+        items = []
+        for r in rows:
+            if r["status"] in closed or r["status"].startswith("proposed by shape"):
+                continue
+            other = status.get(mirror.get(r["number"], ""))
+            if other is None:
+                why = "no mirror glue found"
+            elif other["status"] in closed:
+                why = f"its mirror glue {other['number']} closes: check this number or a fold on this side"
+            else:
+                why = f"its mirror glue {other['number']} is open too: the fold is off on both sides"
+            items.append({"material": material.get(r["piece"], ""), "piece": r["piece"],
+                          "twin": twin_of.get(r["piece"], ""), "what": "glue",
+                          "detail": f"glue {r['number']} to {r['tab_piece']} ({material.get(r['tab_piece'], '')}) "
+                                    f"{r['status']}, {r['gap_mm']} mm apart; {why}"})
+        tied = {}
+        if getattr(self, "twins", None):
+            off = self.twins.asymmetry(self.x, self.solver.reflect)
+            tied = {a: (b, o) for (a, b), o in zip(self.twins.pairs, off)}
+        for a, b in sorted({tuple(sorted(p)) for p in twin_of.items()}):
+            if a not in material or b not in material:
+                continue
+            if a not in tied:
+                detail = "twins not tied: their surface corners do not mirror on the flat pattern"
+            elif tied[a][1] > 2:
+                detail = f"twins fold {tied[a][1]:.1f} mm from mirrored"
+            else:
+                continue
+            items.append({"material": material[a], "piece": a, "twin": b, "what": "mirror", "detail": detail})
+        work = collections.Counter(item["material"] for item in items)
+        rank = {m: k for k, m in enumerate(sorted(work, key=lambda m: (work[m], m)), 1)}
+        items.sort(key=lambda item: (rank[item["material"]], item["piece"], item["what"]))
+        for item in items:
+            item["order"] = rank[item["material"]]
+        return items
+
+    def _viewer_json(self, path: Path, x: np.ndarray, rows: list[dict], review: list[dict] = ()) -> None:
         """Everything app/fold3d-viewer.html draws, with ids that stay put between the 3D model and
         the pattern: face `piece-PP-NN/k` is the k-th face of that piece group in the SVG (the index tab marks use),
         with its corners both folded (vertex ids) and flat (document mm, as the SVG draws them)."""
@@ -1739,9 +1937,17 @@ class Reconstruction:
                           "gap_mm": round(float(gaps[k]), 1), "status": r["status"]})
         wrong = self.solver.wrong_folds(self.x)
         inspect = {row["piece"]: row["reason"] for row in CornerAdjuster(self).rows()[1]}
+        notes = collections.defaultdict(list)
+        for item in review:
+            notes[item["piece"]].append(item["detail"])
+        twin = {}
+        for a, b in MirrorTwins.read(self.svg.with_name("mirror-mismatches.csv")):
+            twin[a], twin[b] = b, a
         data = {"source": self.svg.name, "units": "mm",
                 "vertices": [[round(float(c), 2) for c in p] for p in x],
-                "pieces": {pid: {"material": piece.material, "inspect": inspect.get(pid, "")}
+                "pieces": {pid: {"material": piece.material, "inspect": inspect.get(pid, ""),
+                                      **({"twin": twin[pid]} if pid in twin else {}),
+                                      **({"review": notes[pid]} if pid in notes else {})}
                            for pid, piece in self.asm.pieces.items()},
                 "faces": faces, "glues": glues,
                 "wrong_folds": [[int(h[0]), int(h[1])] for h in self.solver.hinge[wrong]],
@@ -1763,12 +1969,34 @@ class Reconstruction:
             lines += ["f " + " ".join(str(v + 1) for v in verts) for verts in faces]
         path.write_text("\n".join(lines) + "\n")
 
+    def _upright(self, x: np.ndarray) -> np.ndarray:
+        """The model turned for the preview: left-right across the mirror plane (when there is one), the head's
+        hair, horns and horn rings (rust, gold, brown) up from the jaw (red, yellow, white), and the face
+        (red, brown) turned to the camera away from the hair at the back."""
+        x = x - x.mean(axis=0)
+        n = self.solver.plane[0] if getattr(self, "twins", None) else np.array([1.0, 0.0, 0.0])
+
+        def centre(*materials: str) -> np.ndarray | None:
+            verts = [v for pid, vs in self.asm.faces if self.asm.pieces[pid].material in materials for v in vs]
+            return x[verts].mean(axis=0) if verts else None
+
+        top, jaw = centre("gold", "brown", "rust"), centre("red", "yellow", "white")
+        up = (top - jaw) if top is not None and jaw is not None else np.array([0.0, 0.0, 1.0])
+        up = up - (up @ n) * n
+        up /= np.linalg.norm(up)
+        forward = np.cross(n, up)
+        face, hair = centre("red", "brown"), centre("rust")
+        if face is not None and hair is not None and float((face - hair) @ forward) < 0:
+            n, forward = -n, -forward
+        return x @ np.c_[n, -forward, up]   # the front view looks along +y, so the face points to -y
+
     def _preview(self, path: Path, x: np.ndarray) -> None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+        x = self._upright(x)
         light = np.array([0.4, -0.6, 0.7]) / np.linalg.norm([0.4, -0.6, 0.7])
         polys, colours = [], []
         # matplotlib keeps z up and looks at the front from -y; the pose has y up and faces +z.

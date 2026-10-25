@@ -25,7 +25,8 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
     font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  body { display: grid; grid-template-rows: auto 1fr auto; }
+  body { display: grid; grid-template-rows: auto auto 1fr auto; }
+  body > header { grid-row: 1; } body > main { grid-row: 3; } body > footer { grid-row: 4; }
   header { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: baseline; padding: 10px 16px;
     border-bottom: 1px solid var(--line); }
   header h1 { font-size: 16px; margin: 0; }
@@ -37,8 +38,12 @@
   .tint-control { display: inline-flex; align-items: center; gap: 7px; }
   .tint-control input { width: 105px; padding: 0; }
   #tab-rebuild-progress { width: 150px; height: 12px; accent-color: var(--pick); vertical-align: middle; }
-  main { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
-  @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+  main { display: grid; grid-template-columns: var(--left, 1fr) 10px minmax(0, 1fr); min-height: 0; }
+  #split { position: relative; cursor: col-resize; background: var(--line); touch-action: none; display: flex;
+    flex-direction: column; align-items: center; justify-content: center; gap: 6px; z-index: 5; }
+  #split button { width: 18px; height: 28px; padding: 0; font-size: 11px; line-height: 1; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } #split { display: none; } }
   .pane { position: relative; min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--line); }
   #three canvas { display: block; width: 100%; height: 100%; }
   #orbit-pad { position: absolute; left: 10px; top: 10px; z-index: 2; display: grid;
@@ -47,8 +52,8 @@
   #orbit-pad button { border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--panel) 88%, transparent);
     color: var(--ink); font: 18px/1 system-ui, sans-serif; cursor: pointer; }
   #orbit-pad button:hover { background: var(--panel); }
-  #pair-bar { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 3; display: flex; flex-wrap: wrap;
-    align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px;
+  #pair-bar { grid-row: 2; display: flex; flex-wrap: wrap;
+    align-items: center; gap: 6px 8px; padding: 6px 16px; border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--panel) 92%, transparent); color: var(--ink); }
   #pair-bar[hidden] { display: none; }
   #pair-bar button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
@@ -100,24 +105,27 @@
   <h1 id="title">Folded model</h1>
   <span class="stats" id="stats"></span>
   <button id="fit-view" type="button">Overview</button>
+  <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477 or 11-02"
+    aria-label="Find a glue number or a piece" title="A glue number shows both pieces it joins; a piece id shows that piece and its twin"></form>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
   <button id="save-tabs" type="button" disabled title="Mark a face as a tab to enable this">Save tab marks &amp; re-glue</button>
   <progress id="tab-rebuild-progress" aria-label="Re-glue progress" hidden></progress>
   <label class="tint-control">Cardstock tint <input type="range" id="cardstock-tint" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
   <span class="stats" id="viewer-status" aria-live="polite">Right-click a face to edit it or mark it as a tab.</span>
+  <label><input type="checkbox" id="show-scans" checked> page scans</label>
   <label><input type="checkbox" id="show-open" checked> <span class="open">open glues</span></label>
   <label><input type="checkbox" id="show-wrong" checked> <span class="wrong">folds bent the wrong way</span></label>
 </header>
+<div id="pair-bar" role="toolbar" aria-label="Mirror pairs" hidden>
+  <button type="button" data-step="-1" title="Previous pair (B)">◀ Back</button>
+  <span id="pair-label"></span>
+  <button type="button" data-step="1" title="Next pair (N)">Next ▶</button>
+  <button type="button" id="pair-edit">Edit pair…</button>
+  <button type="button" id="pair-close" aria-label="Stop stepping through pairs">✕</button>
+</div>
 <main>
   <div class="pane" id="three">
-    <div id="pair-bar" role="toolbar" aria-label="Mirror pairs" hidden>
-      <button type="button" data-step="-1" title="Previous pair (B)">◀ Back</button>
-      <span id="pair-label"></span>
-      <button type="button" data-step="1" title="Next pair (N)">Next ▶</button>
-      <button type="button" id="pair-edit">Edit pair…</button>
-      <button type="button" id="pair-close" aria-label="Stop stepping through pairs">✕</button>
-    </div>
     <div id="orbit-pad" aria-label="Rotate model">
       <span></span><button type="button" data-turn="up" aria-label="Rotate up" title="Rotate up">↑</button><span></span>
       <button type="button" data-turn="left" aria-label="Rotate left" title="Rotate left">←</button>
@@ -125,6 +133,11 @@
       <button type="button" data-turn="right" aria-label="Rotate right" title="Rotate right">→</button>
     </div>
     <div class="hint">drag to turn · right-drag to pan · scroll to zoom · arrow keys rotate · Shift + arrows pan · click a face</div>
+  </div>
+  <div id="split" role="separator" aria-orientation="vertical" title="Drag to move the split between the 3D model and the pattern">
+    <button type="button" data-collapse="three" title="Hide the 3D model (pattern and piece editor full width)">◀</button>
+    <button type="button" data-collapse="even" title="Split evenly">⇔</button>
+    <button type="button" data-collapse="pattern" title="Hide the pattern (3D model full width)">▶</button>
   </div>
   <div class="pane" id="pattern"><div class="hint">drag to pan · scroll to zoom · click a face</div>
     <section id="piece-editor" role="dialog" aria-modal="false" aria-labelledby="piece-editor-title" hidden>
@@ -145,6 +158,30 @@
 </div>
 
 <script type="module">
+// The split between the 3D model and the pattern (where the piece editor opens): drag it, or
+// collapse either side with its buttons; the place is remembered.
+{
+  const main = document.querySelector("main"), split = document.getElementById("split");
+  const place = left => {
+    main.style.setProperty("--left", left);
+    try { localStorage.setItem("fold3d-split", left); } catch (e) {}
+  };
+  try { const saved = localStorage.getItem("fold3d-split"); if (saved) main.style.setProperty("--left", saved); } catch (e) {}
+  let drag = null;
+  split.addEventListener("pointerdown", e => {
+    if (e.target.closest("button")) return;
+    drag = e.pointerId; split.setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  split.addEventListener("pointermove", e => {
+    if (drag === null) return;
+    const box = main.getBoundingClientRect();
+    const left = Math.max(0, Math.min(box.width - 10, e.clientX - box.left - 5));
+    place(`${(100 * left / box.width).toFixed(1)}%`);
+  });
+  split.addEventListener("pointerup", () => { drag = null; });
+  split.querySelectorAll("[data-collapse]").forEach(b => b.addEventListener("click", () =>
+    place({three: "0px", even: "1fr", pattern: "calc(100% - 10px)"}[b.dataset.collapse])));
+}
 import * as THREE from "three";
 import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 
@@ -290,13 +327,56 @@ class FoldedView {
     this.triFace.forEach((faceIndex, triangleIndex) => geo.addGroup(triangleIndex * 3, 3,
       this.materialIndex.get(pieces[faces[faceIndex].piece].material)));
     geo.computeVertexNormals();
-    this.meshMaterials = materials.map(() => new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, flatShading: true }));
+    // The cut pieces are used inside out: the printed side (counter-clockwise faces, with the numbers) is the inside
+    // of the model. The outside shows the full cardstock colour, the inside the pale tint with the glue numbers.
+    let volume = 0;
+    for (let i = 0; i < pos.length; i += 9) {
+      const a = new THREE.Vector3(...pos.slice(i, i + 3)), b = new THREE.Vector3(...pos.slice(i + 3, i + 6)),
+        c = new THREE.Vector3(...pos.slice(i + 6, i + 9));
+      volume += a.dot(b.clone().cross(c)) / 6;
+    }
+    const printedInside = volume < 0;
+    const materialFor = side => new THREE.MeshLambertMaterial({ vertexColors: true, side, flatShading: true });
+    const outerSide = printedInside ? THREE.BackSide : THREE.FrontSide, innerSide = printedInside ? THREE.FrontSide : THREE.BackSide;
+    this.meshMaterials = materials.map(() => materialFor(outerSide));
+    this.innerMaterials = materials.map(() => materialFor(innerSide));
     this.mesh = new THREE.Mesh(geo, this.meshMaterials);
-    this.scene.add(this.mesh);
+    const innerGeo = new THREE.BufferGeometry();
+    innerGeo.setAttribute("position", geo.attributes.position);
+    innerGeo.setAttribute("color", new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
+    innerGeo.groups = geo.groups;
+    innerGeo.computeVertexNormals();
+    this.inner = new THREE.Mesh(innerGeo, this.innerMaterials);
+    this.scene.add(this.mesh, this.inner);
+    this.buildNumbers(V);
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
       new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
     this.edges = edges; this.scene.add(edges);
     this.paint(null, null);
+  }
+  // Glue numbers written on the inside of the pieces: seen only from inside, through gaps.
+  buildNumbers(V) {
+    const centre = V.reduce((a, v) => [a[0] + v[0] / V.length, a[1] + v[1] / V.length, a[2] + v[2] / V.length], [0, 0, 0]);
+    this.numbers = new THREE.Group();
+    const size = 64, cache = new Map();
+    for (const g of this.model.glues) {
+      if (!cache.has(g.number)) {
+        const canvas = document.createElement("canvas"); canvas.width = canvas.height = size;
+        const context = canvas.getContext("2d");
+        context.font = "bold 30px sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
+        context.lineWidth = 5; context.strokeStyle = "#fff"; context.strokeText(g.number, size / 2, size / 2);
+        context.fillStyle = "#111"; context.fillText(g.number, size / 2, size / 2);
+        cache.set(g.number, new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
+      }
+      const a = V[g.v[0]], b = V[g.v[1]];
+      const mid = [0, 1, 2].map(i => (a[i] + b[i]) / 2);
+      const towards = new THREE.Vector3(...centre).sub(new THREE.Vector3(...mid)).normalize().multiplyScalar(3);
+      const sprite = new THREE.Sprite(cache.get(g.number));
+      sprite.position.set(...mid).add(towards); sprite.scale.set(7, 7, 1);
+      sprite.userData.materials = new Set([g.piece, g.tab_piece].map(piece => this.model.pieces[piece]?.material).filter(Boolean));
+      this.numbers.add(sprite);
+    }
+    this.scene.add(this.numbers);
   }
   buildLines() {
     const css = getComputedStyle(document.documentElement);
@@ -345,19 +425,32 @@ class FoldedView {
         if (match >= 0) relatedFaces.add(match);
       }
     }
-    const c = this.mesh.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
+    const c = this.mesh.geometry.attributes.color, ci = this.inner.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
     this.triFace.forEach((f, t) => {
       let colour = this.base[f].clone();
       if (f === face || relatedFaces.has(f)) colour = pick.clone();
       else if (piece && this.model.faces[f].piece === piece) colour.lerp(pick, 0.45);
       else if (this.relatedPieces?.includes(this.model.faces[f].piece)) colour.lerp(pick, 0.45);
-      for (let k = 0; k < 3; k++) c.setXYZ(3 * t + k, colour.r, colour.g, colour.b);
+      const pale = colour.clone().lerp(new THREE.Color(0xffffff), 0.45);
+      for (let k = 0; k < 3; k++) {
+        c.setXYZ(3 * t + k, colour.r, colour.g, colour.b);
+        ci.setXYZ(3 * t + k, pale.r, pale.g, pale.b);
+      }
     });
-    c.needsUpdate = true;
+    c.needsUpdate = true; ci.needsUpdate = true;
+  }
+  // The nearest face the ray meets among the cardstocks shown (hidden ones cannot be clicked).
+  visibleHit(ray) {
+    return ray.intersectObjects([this.mesh, this.inner]).find(hit => {
+      const material = this.model.pieces[this.model.faces[this.triFace[hit.faceIndex]].piece]?.material;
+      return !this.currentMaterialFilter || material === this.currentMaterialFilter;
+    });
   }
   setMaterialFilter(material) {
     this.currentMaterialFilter = material;
     this.meshMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
+    this.innerMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
+    this.numbers.children.forEach(sprite => { sprite.visible = !material || sprite.userData.materials.has(material); });
     this.edges.visible = !material;
     this.updateDiagnosticLines();
     this.fit();
@@ -377,7 +470,7 @@ class FoldedView {
       if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
       const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
       ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), this.camera);
-      const hit = ray.intersectObject(this.mesh)[0];
+      const hit = this.visibleHit(ray);
       if (hit) this.onPick(this.triFace[hit.faceIndex], "3d");
     });
     canvas.addEventListener("contextmenu", e => {
@@ -388,7 +481,7 @@ class FoldedView {
       const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
       ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1,
         -(e.clientY - r.top) / r.height * 2 + 1), this.camera);
-      const hit = ray.intersectObject(this.mesh)[0];
+      const hit = this.visibleHit(ray);
       if (hit) this.onContextMenu(this.triFace[hit.faceIndex], e.clientX, e.clientY);
     });
   }
@@ -432,8 +525,13 @@ class FoldedView {
     if (!points.length) return;
     const box = new THREE.Box3().setFromPoints(points), centre = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()), radius = Math.max(size.x, size.y, size.z, 1);
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-    const distance = radius / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) * 1.25;
+    // Look at the pieces from outside the model, along the line from its middle through them,
+    // and stand back far enough that the rest of the model is not in front of the camera.
+    const whole = new THREE.Box3().setFromObject(this.mesh), middle = whole.getCenter(new THREE.Vector3());
+    const out = centre.clone().sub(middle);
+    const direction = out.lengthSq() > 1 ? out.normalize() : this.camera.position.clone().sub(this.controls.target).normalize();
+    const reach = whole.getSize(new THREE.Vector3()).length() / 2 - centre.distanceTo(middle);
+    const distance = Math.max(radius / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) * 1.25, reach + radius);
     this.controls.target.copy(centre);
     this.camera.position.copy(centre).addScaledVector(direction, distance);
     this.camera.lookAt(centre); this.controls.update();
@@ -478,13 +576,29 @@ class PatternView {
     this.el = el; this.model = model; this.onPick = onPick; this.onContextMenu = onContextMenu;
     this.tintStrength = 55; this.selectedPiece = null; this.selectedFace = null;
     const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
-    // the page scans and the review marks are not part of the pattern (drop them before they load)
-    doc.querySelectorAll("metadata, image").forEach(n => n.remove());
-    doc.querySelectorAll("g").forEach(g => {
-      const label = g.getAttribute("inkscape:label");
-      if (label === "Source" || label === "Review") g.remove();
+    // The review marks are not part of the pattern. The page scans stay, faint underneath, behind
+    // the "page scans" switch; their file names are relative to the SVG (or served by the review server).
+    doc.querySelectorAll("metadata").forEach(n => n.remove());
+    doc.querySelectorAll("g").forEach(g => { if (g.getAttribute("inkscape:label") === "Review") g.remove(); });
+    const scanUrl = href => modelName && svgUrl.startsWith("/api/")
+      ? `/api/preview?model=${encodeURIComponent(modelName)}&file=${encodeURIComponent(href.split("/").pop())}`
+      : new URL(href, new URL(svgUrl, location.href)).href;
+    doc.querySelectorAll("image").forEach(img => {
+      const href = img.getAttribute("xlink:href") || img.getAttribute("href");
+      if (!href) { img.remove(); return; }
+      img.removeAttribute("xlink:href"); img.setAttribute("href", scanUrl(href));
     });
+    this.scans = [...doc.querySelectorAll("g")].find(g => g.getAttribute("inkscape:label") === "Source");
     this.svg = document.importNode(doc.documentElement, true);
+    this.scans = this.scans && this.svg.querySelector(`#${CSS.escape(this.scans.id || "source")}`);
+    const toggle = document.getElementById("show-scans");
+    const showScans = on => { if (this.scans) this.scans.style.display = on ? "" : "none"; };
+    try { toggle.checked = localStorage.getItem("fold3d-show-scans") !== "false"; } catch (e) {}
+    showScans(toggle.checked);
+    toggle.addEventListener("change", () => {
+      showScans(toggle.checked);
+      try { localStorage.setItem("fold3d-show-scans", String(toggle.checked)); } catch (e) {}
+    });
     this.svg.removeAttribute("width"); this.svg.removeAttribute("height");
     this.svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
     el.prepend(this.svg);
@@ -508,7 +622,8 @@ class PatternView {
       const material = this.model.pieces[f.piece].material;
       const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3").lerp(new THREE.Color("#ffffff"), 0.68);
       const tint = `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
-      const tinted = this.tintStrength > 0;
+      // After a search only the pieces found keep their cardstock tint.
+      const tinted = this.tintStrength > 0 && (!this.only || this.only.has(f.piece));
       // the picked face and its piece stay blue whatever the cardstock tint is
       if (i === face) { p.setAttribute("fill", "#1f6feb"); p.setAttribute("fill-opacity", "0.55"); }
       else if (mine) { p.setAttribute("fill", "#1f6feb"); p.setAttribute("fill-opacity", "0.22"); }
@@ -539,7 +654,7 @@ class PatternView {
   }
   focus(piece) {
     const xs = [], ys = [];
-    for (const i of this.model.facesOf.get(piece)) for (const [x, y] of this.model.faces[i].flat) { xs.push(x); ys.push(y); }
+    for (const i of [piece].flat().flatMap(p => this.model.facesOf.get(p) || [])) for (const [x, y] of this.model.faces[i].flat) { xs.push(x); ys.push(y); }
     const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys), pad = 0.4 * Math.max(w, h, 40);
     this.setView([Math.min(...xs) - pad, Math.min(...ys) - pad, w + 2 * pad, h + 2 * pad]);
   }
@@ -551,17 +666,23 @@ class PatternView {
   }
   listen() {
     let drag = null;
+    // The Piece Review panel sits inside this pane: its buttons and page get their own pointer
+    // events (capturing the pointer here would swallow the click on Close).
+    const inEditor = e => e.target.closest?.("#piece-editor");
     this.el.addEventListener("contextmenu", e => {
+      if (inEditor(e)) return;
       e.preventDefault();
       const hit = document.elementsFromPoint(e.clientX, e.clientY).find(n => n.dataset && n.dataset.face !== undefined);
       if (hit) this.onContextMenu(Number(hit.dataset.face), e.clientX, e.clientY);
     });
     this.el.addEventListener("wheel", e => {
+      if (inEditor(e)) return;
       e.preventDefault();
       const [x, y] = this.toSvg(e), k = Math.exp(e.deltaY * 0.0015), [vx, vy, vw, vh] = this.view;
       this.setView([x - (x - vx) * k, y - (y - vy) * k, vw * k, vh * k]);
     }, { passive: false });
     this.el.addEventListener("pointerdown", e => {
+      if (inEditor(e)) return;
       drag = { x: e.clientX, y: e.clientY, view: [...this.view], moved: false, s: this.toSvg(e)[2] };
       this.el.setPointerCapture(e.pointerId);
     });
@@ -580,7 +701,7 @@ class PatternView {
       }
       drag = null;
     });
-    this.el.addEventListener("dblclick", () => this.setView([...this.full]));
+    this.el.addEventListener("dblclick", e => { if (!inEditor(e)) this.setView([...this.full]); });
   }
 }
 
@@ -712,6 +833,7 @@ class Viewer {
       this.folded.showWrong = e.target.checked; this.folded.updateDiagnosticLines();
     });
     this.setupPairWalk();
+    this.setupFind();
   }
   // Step through the model one mirror pair at a time, those with the most open glues and
   // wrong-way folds first; pieces with no twin found come last, on their own.
@@ -725,19 +847,34 @@ class Viewer {
       this.pairs.push({pieces: pair, unlike: this.model.unlikeTwins.has(piece),
                        trouble: pair.reduce((sum, p) => sum + this.model.trouble(p), 0)});
     }
-    // Twins traced unlike each other first, then by open glues and wrong-way folds; lone pieces last.
-    this.pairs.sort((a, b) => (a.pieces.length === 1) - (b.pieces.length === 1) || b.unlike - a.unlike
-      || b.trouble - a.trouble);
+    // Pairs the fold left for a person to judge come first, cardstock colours with the least to judge
+    // first; then twins traced unlike each other, then by open glues and wrong-way folds; lone pieces last.
+    const judge = p => (this.model.pieces[p]?.review || []).length, work = new Map();
+    for (const pair of this.pairs) {
+      pair.judge = pair.pieces.reduce((sum, p) => sum + judge(p), 0);
+      const m = this.model.pieces[pair.pieces[0]]?.material || "";
+      work.set(m, (work.get(m) || 0) + pair.judge);
+    }
+    const rank = pair => pair.judge ? work.get(this.model.pieces[pair.pieces[0]]?.material || "") : Infinity;
+    this.pairs.sort((a, b) => rank(a) - rank(b) || (a.pieces.length === 1) - (b.pieces.length === 1)
+      || b.unlike - a.unlike || b.trouble - a.trouble);
     this.pairAt = 0;
     const bar = document.getElementById("pair-bar");
-    document.getElementById("pair-walk").addEventListener("click", () => { bar.hidden = false; this.showPair(0); });
+    // While stepping, only the pair's cardstock is shown, so other colours cannot hide the pair.
+    const filter = document.getElementById("material-filter");
+    const showMaterial = value => { if (filter.value !== value) { filter.value = value; filter.dispatchEvent(new Event("change")); } };
+    this.showPairMaterial = piece => showMaterial(this.model.pieces[piece]?.material || "");
+    document.getElementById("pair-walk").addEventListener("click", () => {
+      if (bar.hidden) this.filterBeforeWalk = filter.value;
+      bar.hidden = false; this.showPair(0);
+    });
     bar.querySelectorAll("[data-step]").forEach(b => b.addEventListener("click", () => this.showPair(Number(b.dataset.step))));
     document.getElementById("pair-edit").addEventListener("click", () => {
       this.menuFace = this.model.facesOf.get(this.pairs[this.pairAt].pieces[0])[0];
       this.openPieceEditor();
     });
     document.getElementById("pair-close").addEventListener("click", () => {
-      bar.hidden = true; this.folded.relatedPieces = [];
+      bar.hidden = true; this.folded.relatedPieces = []; showMaterial(this.filterBeforeWalk || "");
       this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
     });
     document.addEventListener("keydown", e => {
@@ -746,16 +883,55 @@ class Viewer {
       if (step) { e.preventDefault(); this.showPair(step); }
     });
   }
+  // Find a glue by its number (both pieces it joins) or a piece by its id (with its twin).
+  setupFind() {
+    const input = document.getElementById("find-text");
+    // Clearing the box (its ✕ or emptying it) tints every piece again.
+    input.addEventListener("input", () => { if (!input.value.trim() && this.pattern.only) {
+      this.pattern.only = null; this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace); } });
+    document.getElementById("find").addEventListener("submit", e => {
+      e.preventDefault();
+      const text = input.value.trim().toLowerCase();
+      if (!text) { this.pattern.only = null; this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace); return; }
+      const id = text.match(/^(?:piece-)?(\d\d)-(\d\d)$/), piece = id && `piece-${id[1]}-${id[2]}`;
+      let pieces = [], glue = null;
+      if (piece && this.model.facesOf.has(piece)) {
+        pieces = [piece, this.model.pieces[piece]?.twin].filter(p => p && this.model.facesOf.has(p));
+      } else {
+        glue = this.model.glues.find(g => String(g.number).toLowerCase() === text);
+        if (glue) pieces = [glue.piece, glue.tab_piece];
+      }
+      if (!pieces.length) {
+        document.getElementById("viewer-status").textContent = `Nothing called ${input.value.trim()}.`;
+        return;
+      }
+      const [first, other] = pieces;
+      const filter = document.getElementById("material-filter");
+      if (filter.value && pieces.some(p => this.model.pieces[p]?.material !== filter.value)) {
+        filter.value = ""; filter.dispatchEvent(new Event("change"));
+      }
+      this.folded.relatedPieces = other ? [other] : [];
+      this.pattern.only = new Set(pieces);
+      this.folded.paint(first, null); this.pattern.paint(first, null);
+      this.folded.focusPiece(pieces); this.pattern.focus(pieces);
+      this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
+      if (other) this.describe(this.model.faces[this.model.facesOf.get(other)[0]], true);
+      document.getElementById("viewer-status").textContent = glue
+        ? `Glue ${glue.number}: ${glue.piece} (edge) ↔ ${glue.tab_piece} (tab), ${glue.status}, ${glue.gap_mm} mm`
+        : `${first}${other ? ` and its twin ${other}` : ""}`;
+    });
+  }
   showPair(step) {
     this.pairAt = (this.pairAt + step + this.pairs.length) % this.pairs.length;
-    const {pieces, trouble, unlike} = this.pairs[this.pairAt], [piece, twin] = pieces;
+    const {pieces, trouble, unlike, judge} = this.pairs[this.pairAt], [piece, twin] = pieces;
+    this.showPairMaterial(piece);
     this.folded.relatedPieces = twin ? [twin] : [];
     this.folded.paint(piece, null); this.pattern.paint(piece, null);
     this.folded.focusPiece(pieces); this.pattern.focus(piece);
     this.describe(this.model.faces[this.model.facesOf.get(piece)[0]]);
     if (twin) this.describe(this.model.faces[this.model.facesOf.get(twin)[0]], true);
     document.getElementById("pair-label").textContent = `${twin ? "Pair" : "Piece"} ${this.pairAt + 1} of ${this.pairs.length}: `
-      + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${unlike ? "shapes differ · " : ""}`
+      + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${judge ? `${judge} for you to judge (${this.model.pieces[piece]?.material}) · ` : ""}${unlike ? "shapes differ · " : ""}`
       + (trouble ? `${trouble} open glue${trouble === 1 ? "" : "s"} or wrong-way fold${trouble === 1 ? "" : "s"}` : "nothing flagged");
   }
   select(face, from) {
@@ -803,6 +979,9 @@ class Viewer {
     const faceIndex = this.model.faces.indexOf(f);
     h.textContent = `${f.piece} · face ${f.id.split("/")[1]} · ${this.model.isTab(faceIndex) ? "tab · white" : `${piece.material} cardstock`}`;
     info.append(h);
+    for (const note of piece.review || []) {
+      const p = document.createElement("div"); p.className = "note"; p.textContent = `To judge: ${note}`; info.append(p);
+    }
     if (piece.inspect) {
       const p = document.createElement("div"); p.className = "note"; p.textContent = `To check: ${piece.inspect}`; info.append(p);
     }

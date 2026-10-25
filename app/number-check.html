@@ -606,6 +606,7 @@ const segDist = (q, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx 
 let mode = "add", foldKind = "valley";
 const TWIN_FIT_MM = 1;    // paired corners further apart than this (rms) are not mirror copies; refuse to copy
 const TWIN_SNAP_MM = 1.5; // a copied end lands on the twin's own corner or fold end this close
+const pieceZoom = {};      // piece -> how far its drawing is zoomed and panned
 const copyNotes = {};     // piece -> what the last copy onto it did, shown on its next drawing only
 const hasEdits = f => f.add.length || f.drop.length || f.move.length || f.pointDrop.length || f.numbers.length;
 // Mirror one piece's edits onto its twin: lay the traced outline onto the twin's (a reflection), map
@@ -660,6 +661,48 @@ function copyEditsToTwin(fromId, toId) {
   return copied || missed ? `Copied ${copied} edit${copied === 1 ? "" : "s"} from ${fromId}${missed
     ? `; ${missed} had no matching corner or fold here, add ${missed === 1 ? "it" : "them"} by hand` : ""}. Undo takes them back one at a time.`
     : `${toId} already has all of ${fromId}'s edits.`;
+}
+// Make the twin an exact mirror copy of this piece as it stands now (trace plus edits): the twin's
+// earlier geometry edits are replaced, each twin corner moves onto this piece's mirrored corner,
+// twin corners and folds with no counterpart here are removed and this piece's other folds are added.
+// Numbers are left alone. Undo takes the copy back one step at a time.
+function copyWholeToTwin(fromId, toId) {
+  const from = D.traces[fromId], to = D.traces[toId];
+  if (!from || !to) return "The twin has no trace to copy onto.";
+  const map = fitTwin(from.outline, to.outline);
+  if (!Number.isFinite(map.rms) || map.paired < 3)
+    return `Nothing copied: the two outlines do not line up as mirror copies (${map.paired} corners match). Copy by hand.`;
+  const f = fixOf(fromId), g = fixOf(toId);
+  const round = p => p.map(v => +(+v).toFixed(2));
+  const d = (p, c) => Math.hypot(p[0] - c[0], p[1] - c[1]);
+  const kept = c => !f.pointDrop.some(p => d(p, c) < 0.5);
+  const corners = from.outline.filter(kept).map(c => round(map(movedIn(f, c))));
+  const sameFold = (u, v, a, b, tol) => Math.max(d(u, a), d(v, b)) < tol || Math.max(d(u, b), d(v, a)) < tol;
+  const folds = from.folds.map(h => ({a: movedIn(f, [h[0], h[1]]), b: movedIn(f, [h[2], h[3]]), kind: h[4] || "valley"}))
+    .filter(h => !f.drop.some(e => sameFold(e.a, e.b, h.a, h.b, 0.5)))
+    .concat(f.add.map(h => ({a: h.a, b: h.b, kind: h.kind})))
+    .map(h => ({a: round(map(h.a)), b: round(map(h.b)), kind: h.kind}));
+  g.add = []; g.drop = []; g.move = []; g.pointDrop = []; g.log = g.log.filter(x => x === "numbers");
+  const push = (list, item) => { g[list].push(item); g.log.push(list); };
+  // Twin corners pair with this piece's mirrored corners, nearest to nearest, within 6 mm.
+  const used = new Set(), at = new Map();
+  for (const c of to.outline) {
+    let k = -1, best = 6;
+    corners.forEach((p, i) => { if (!used.has(i) && d(p, c) < best) { best = d(p, c); k = i; } });
+    if (k < 0) { push("pointDrop", c.slice()); continue; }
+    used.add(k); at.set(c.join(), corners[k]);
+    if (best > 0.05) push("move", {a: c.slice(), b: corners[k]});
+  }
+  const missing = corners.length - used.size;
+  const twinFolds = to.folds.map(h => [at.get(`${h[0]},${h[1]}`) || [h[0], h[1]], at.get(`${h[2]},${h[3]}`) || [h[2], h[3]], [h[0], h[1]], [h[2], h[3]]]);
+  const matched = new Set();
+  for (const [u, v, a, b] of twinFolds) {
+    const i = folds.findIndex((h, k) => !matched.has(k) && sameFold(u, v, h.a, h.b, TWIN_SNAP_MM));
+    if (i >= 0) matched.add(i); else push("drop", {a: u.slice(), b: v.slice()});
+  }
+  folds.forEach((h, k) => { if (!matched.has(k)) push("add", h); });
+  return `Copied ${fromId} onto ${toId}: ${g.move.length} corners moved, ${g.pointDrop.length} removed, ${
+    g.drop.length} folds removed, ${g.add.length} added${missing ? `; ${missing} corner${missing === 1 ? "" : "s"} of ${fromId} have no corner on ${toId}, add by hand` : ""}. Undo takes it back one step at a time.`;
 }
 // A piece and its mirror twin are reviewed together, side by side; pairs needing the most work come first.
 function pieceOrder() {
@@ -822,6 +865,7 @@ function pieceCard(q, list, rerender) {
       <div class="tools"><button data-m="add">Add fold</button><select><option value="valley">valley (dashed)</option><option value="mountain">mountain (dash-dot)</option></select><button data-m="drop">Remove fold</button><button data-m="move">Move corner</button><button data-m="point">Remove corner</button><button data-m="number">Numbers</button>${reviewServer ? '<button data-a="show-3d">Show in 3D</button>' : ""}</div>
       ${pending.length ? `<div class="tools"><button data-a="twin">Add the twin's ${pending.length} fold${pending.length > 1 ? "s" : ""}</button></div>` : ""}
       ${q.twin && D.traces[q.twin] && hasEdits(f) ? `<div class="tools"><button data-a="copy-twin" title="Mirror this piece's added and removed folds, moved and removed corners and added numbers onto ${q.twin}">Copy my edits to mirror ${q.twin}</button></div>` : ""}
+      ${q.twin && D.traces[q.twin] ? `<div class="tools"><button data-a="copy-whole" title="Make ${q.twin} an exact mirror copy of this piece as it stands now: corners and folds; its own earlier edits are replaced">Copy this whole piece to mirror ${q.twin}</button></div>` : ""}
       ${copyNotes[q.piece] ? `<div class="hint">${copyNotes[q.piece]}</div>` : ""}
       <div class="meta how"></div>
       <label class="meta">Note for edits the page cannot make<textarea rows="3" style="width:100%;font:inherit">${f.note.replace(/</g, "&lt;")}</textarea></label>
@@ -830,6 +874,35 @@ function pieceCard(q, list, rerender) {
   list.appendChild(el);
   delete copyNotes[q.piece];
   const svg = el.querySelector("svg"), clicks = el.querySelector(".clicks"), how = el.querySelector(".how");
+  // Zoom (scroll) and pan (drag) the scan and drawing together; scrolling all the way out fits again.
+  // The view is kept per piece, so an edit does not throw it away.
+  const scan = el.querySelector(".scan"), layers = [scan.querySelector("img"), svg];
+  const zoom = pieceZoom[q.piece] ??= {k: 1, x: 0, y: 0};
+  const applyZoom = () => layers.forEach(n => { n.style.transformOrigin = "0 0";
+    n.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.k})`; });
+  applyZoom();
+  scan.addEventListener("wheel", e => {
+    e.preventDefault();
+    const box = scan.getBoundingClientRect(), px = e.clientX - box.left, py = e.clientY - box.top;
+    const k = Math.min(20, Math.max(1, zoom.k * Math.exp(-e.deltaY * 0.0015))), f = k / zoom.k;
+    zoom.x = px - (px - zoom.x) * f; zoom.y = py - (py - zoom.y) * f; zoom.k = k;
+    if (k === 1) { zoom.x = 0; zoom.y = 0; }
+    applyZoom();
+  }, {passive: false});
+  let pan = null, panned = false;
+  scan.addEventListener("pointerdown", e => {
+    if (dragging || e.button > 1) return;   // a corner being moved keeps the pointer
+    pan = {x: e.clientX, y: e.clientY, zx: zoom.x, zy: zoom.y, id: e.pointerId}; panned = false;
+  });
+  scan.addEventListener("pointermove", e => {
+    if (!pan || dragging) return;
+    const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+    if (!panned && Math.hypot(dx, dy) < 5) return;
+    if (!panned) { panned = true; scan.setPointerCapture(pan.id); }
+    zoom.x = pan.zx + dx; zoom.y = pan.zy + dy; applyZoom();
+  });
+  scan.addEventListener("pointerup", () => { pan = null; });
+  scan.addEventListener("click", e => { if (panned) { e.stopPropagation(); e.preventDefault(); panned = false; } }, true);
   const kind = el.querySelector("select");
   kind.value = foldKind; kind.addEventListener("change", () => { foldKind = kind.value; });
   el.querySelector("textarea").addEventListener("input", e => { f.note = e.target.value; remember(); });
@@ -930,6 +1003,8 @@ function pieceCard(q, list, rerender) {
     for (const g of pending) { f.add.push({kind: g.kind, a: g.a, b: g.b}); f.log.push("add"); } changed(); });
   el.querySelector("[data-a=copy-twin]")?.addEventListener("click", () => {
     copyNotes[q.twin] = copyEditsToTwin(q.piece, q.twin); changed(); });
+  el.querySelector("[data-a=copy-whole]")?.addEventListener("click", () => {
+    copyNotes[q.twin] = copyWholeToTwin(q.piece, q.twin); changed(); });
 }
 document.addEventListener("keydown", e => {
   if (filter === "pieces" && e.key === "Enter" && !["INPUT", "SELECT", "TEXTAREA"].includes(e.target.tagName)) {
