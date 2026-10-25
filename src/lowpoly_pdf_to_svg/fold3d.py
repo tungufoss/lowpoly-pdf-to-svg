@@ -1969,34 +1969,14 @@ class Reconstruction:
             lines += ["f " + " ".join(str(v + 1) for v in verts) for verts in faces]
         path.write_text("\n".join(lines) + "\n")
 
-    def _upright(self, x: np.ndarray) -> np.ndarray:
-        """The model turned for the preview: left-right across the mirror plane (when there is one), the head's
-        hair, horns and horn rings (rust, gold, brown) up from the jaw (red, yellow, white), and the face
-        (red, brown) turned to the camera away from the hair at the back."""
-        x = x - x.mean(axis=0)
-        n = self.solver.plane[0] if getattr(self, "twins", None) else np.array([1.0, 0.0, 0.0])
-
-        def centre(*materials: str) -> np.ndarray | None:
-            verts = [v for pid, vs in self.asm.faces if self.asm.pieces[pid].material in materials for v in vs]
-            return x[verts].mean(axis=0) if verts else None
-
-        top, jaw = centre("gold", "brown", "rust"), centre("red", "yellow", "white")
-        up = (top - jaw) if top is not None and jaw is not None else np.array([0.0, 0.0, 1.0])
-        up = up - (up @ n) * n
-        up /= np.linalg.norm(up)
-        forward = np.cross(n, up)
-        face, hair = centre("red", "brown"), centre("rust")
-        if face is not None and hair is not None and float((face - hair) @ forward) < 0:
-            n, forward = -n, -forward
-        return x @ np.c_[n, -forward, up]   # the front view looks along +y, so the face points to -y
-
     def _preview(self, path: Path, x: np.ndarray) -> None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-        x = self._upright(x)
+        # x is already posed (x right, y up, z towards the viewer); the camera looks along +y with z up
+        x = np.c_[x[:, 0], -x[:, 2], x[:, 1]]
         light = np.array([0.4, -0.6, 0.7]) / np.linalg.norm([0.4, -0.6, 0.7])
         polys, colours = [], []
         # matplotlib keeps z up and looks at the front from -y; the pose has y up and faces +z.
