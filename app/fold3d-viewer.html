@@ -6,7 +6,8 @@
 <title>Folded Model Viewer</title>
 <!-- The glued model from fold3d.py beside the traced pattern. Click a face in 3D to find it on the
      pattern, or a face on the pattern to find it in 3D. Data: fold3d.json (fold3d.py) and the
-     review SVG; pass ?json=…&svg=… to load another model. Needs http (make -f fold3d.mk view). -->
+     review SVG; pass ?json=…&svg=… to load another model. The Labels switch shows the Cricut labels
+     and piece numbers from <p>-export.svg next to the SVG (or ?export=…). Needs http (make -f fold3d.mk view). -->
 <style>
   :root {
     --bg: #f7f6f3; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a66; --line: #dddbd5;
@@ -125,6 +126,8 @@
   <progress id="tab-rebuild-progress" aria-label="Re-glue progress" hidden></progress>
   <label class="tint-control">Cardstock tint <input type="range" id="cardstock-tint" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
   <span class="stats" id="viewer-status" aria-live="polite">Right-click a face to edit it or mark it as a tab.</span>
+  <label title="PDF: the numbers read from the template. Cricut: the short labels and piece numbers the pen draws (from the export)">Labels
+    <select id="label-mode" aria-label="Which labels to show"><option value="pdf">PDF numbers</option><option value="cricut">Cricut labels</option></select></label>
   <label><input type="checkbox" id="show-scans" checked> page scans</label>
   <label><input type="checkbox" id="show-open" checked> <span class="open">open glues</span></label>
   <label><input type="checkbox" id="show-wrong" checked> <span class="wrong">folds bent the wrong way</span></label>
@@ -205,6 +208,9 @@ const params = new URLSearchParams(location.search);
 const jsonUrl = params.get("json") || "../data/example/fold3d.json";
 const svgUrl = params.get("svg") || "../data/example/example.svg";
 const modelName = params.get("model") || jsonUrl.match(/\/data\/([^/]+)\//)?.[1] || "";
+// The Cricut export (make export) next to the SVG, for the "Cricut labels" switch; optional.
+const exportUrl = params.get("export") || (svgUrl.startsWith("/api/svg")
+  ? svgUrl.replace("/api/svg", "/api/export") : svgUrl.replace(/\.svg($|\?)/, "-export.svg$1"));
 const SVGNS = "http://www.w3.org/2000/svg";
 
 class Model {
@@ -376,25 +382,60 @@ class FoldedView {
   buildNumbers(V) {
     const centre = V.reduce((a, v) => [a[0] + v[0] / V.length, a[1] + v[1] / V.length, a[2] + v[2] / V.length], [0, 0, 0]);
     this.numbers = new THREE.Group();
-    const size = 64, cache = new Map();
+    this.spriteCache = new Map();
     for (const g of this.model.glues) {
-      if (!cache.has(g.number)) {
-        const canvas = document.createElement("canvas"); canvas.width = canvas.height = size;
-        const context = canvas.getContext("2d");
-        context.font = "bold 30px sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
-        context.lineWidth = 5; context.strokeStyle = "#fff"; context.strokeText(g.number, size / 2, size / 2);
-        context.fillStyle = "#111"; context.fillText(g.number, size / 2, size / 2);
-        cache.set(g.number, new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
-      }
       const a = V[g.v[0]], b = V[g.v[1]];
       const mid = [0, 1, 2].map(i => (a[i] + b[i]) / 2);
       const towards = new THREE.Vector3(...centre).sub(new THREE.Vector3(...mid)).normalize().multiplyScalar(3);
-      const sprite = new THREE.Sprite(cache.get(g.number));
+      const sprite = new THREE.Sprite(this.spriteMaterial(String(g.number)));
       sprite.position.set(...mid).add(towards); sprite.scale.set(7, 7, 1);
       sprite.userData.materials = new Set([g.piece, g.tab_piece].map(piece => this.model.pieces[piece]?.material).filter(Boolean));
+      sprite.userData.glue = g;
+      this.numbers.add(sprite);
+    }
+    // Piece numbers (Cricut labels only): at the middle of each piece, pulled in like the glue numbers.
+    for (const [piece, faces] of this.model.facesOf) {
+      const corners = faces.flatMap(i => this.model.faces[i].v.map(v => V[v]));
+      const mid = [0, 1, 2].map(i => corners.reduce((sum, c) => sum + c[i], 0) / corners.length);
+      const towards = new THREE.Vector3(...centre).sub(new THREE.Vector3(...mid)).normalize().multiplyScalar(3);
+      const sprite = new THREE.Sprite(this.spriteMaterial(""));
+      sprite.position.set(...mid).add(towards); sprite.scale.set(10, 10, 1);
+      sprite.userData.materials = new Set([this.model.pieces[piece]?.material].filter(Boolean));
+      sprite.userData.piece = piece; sprite.visible = false;
       this.numbers.add(sprite);
     }
     this.scene.add(this.numbers);
+  }
+  // A sprite texture for a glue number or label; frame "circle" or "square" draws a piece number's mark.
+  spriteMaterial(text, frame = "") {
+    const key = `${text}|${frame}`;
+    if (!this.spriteCache.has(key)) {
+      const size = 64, canvas = document.createElement("canvas"); canvas.width = canvas.height = size;
+      const context = canvas.getContext("2d");
+      context.font = "bold 30px sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
+      if (frame) {
+        context.lineWidth = 7; context.strokeStyle = "#fff";
+        const path = () => { context.beginPath(); frame === "circle" ? context.arc(32, 32, 26, 0, 2 * Math.PI) : context.rect(7, 7, 50, 50); };
+        path(); context.stroke(); context.lineWidth = 3; context.strokeStyle = "#111"; path(); context.stroke();
+      }
+      context.lineWidth = 5; context.strokeStyle = "#fff"; context.strokeText(text, size / 2, size / 2);
+      context.fillStyle = "#111"; context.fillText(text, size / 2, size / 2);
+      this.spriteCache.set(key, new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), transparent: true }));
+    }
+    return this.spriteCache.get(key);
+  }
+  // labels: null for the PDF numbers, else {glue(g) -> label, pieces: Map piece -> {number, frame}}.
+  setLabels(labels) {
+    this.cricut = !!labels;
+    for (const sprite of this.numbers.children) {
+      const {glue, piece} = sprite.userData;
+      if (glue) sprite.material = this.spriteMaterial(labels ? labels.glue(glue) : String(glue.number));
+      else if (labels?.pieces.has(piece)) {
+        const {number, frame} = labels.pieces.get(piece);
+        sprite.material = this.spriteMaterial(number, frame);
+      }
+    }
+    this.setMaterialFilter(this.material ?? "");
   }
   buildLines() {
     const css = getComputedStyle(document.documentElement);
@@ -492,7 +533,10 @@ class FoldedView {
     for (const list of [this.meshMaterials, this.innerMaterials])
       list.forEach((entry, i) => { entry.visible = i >= n || !material || this.materialNames[i] === material; });
     // numbers, open glues and wrong folds only where every piece involved is the chosen cardstock
-    this.numbers.children.forEach(sprite => { sprite.visible = !material || this.onlyMaterial(sprite.userData.materials, material); });
+    this.material = material;
+    this.numbers.children.forEach(sprite => {
+      sprite.visible = (!sprite.userData.piece || !!this.cricut) && (!material || this.onlyMaterial(sprite.userData.materials, material));
+    });
     this.edges.visible = !material;
     this.updateDiagnosticLines();
     this.fit();
@@ -688,6 +732,29 @@ class PatternView {
       c.setAttribute("fill-opacity", String(Math.min(0.3, Number(p.getAttribute("fill-opacity")) || 0)));
     }
   }
+  // Cricut labels: each piece's Draw group from the export (same ids and coordinates) in place of
+  // the PDF numbers; null brings the PDF numbers back.
+  setLabels(exportDoc) {
+    for (const group of this.pieceGroups) {
+      const draw = group.querySelector('g[data-operation="draw"]');
+      if (!draw) continue;
+      if (exportDoc && !group.querySelector(".cricut-labels")) {
+        const source = exportDoc.querySelector(`g[id="${CSS.escape(group.id)}"] g[data-operation="draw"]`);
+        if (source) {
+          const copy = document.importNode(source, true);
+          copy.removeAttribute("id"); copy.classList.add("cricut-labels");
+          // the pattern's label colour, not the export's white-on-dark-card, so they read on the pale tint
+          copy.setAttribute("style", draw.getAttribute("style") || "");
+          const ink = draw.style.fill || "#8e24aa";
+          copy.querySelectorAll("path").forEach(path => { path.style.stroke = ink; });
+          draw.after(copy);
+        }
+      }
+      const copy = group.querySelector(".cricut-labels");
+      draw.style.display = exportDoc && copy ? "none" : "";
+      if (copy) copy.style.display = exportDoc ? "" : "none";
+    }
+  }
   setTint(strength) { this.tintStrength = Math.max(0, Math.min(100, Number(strength) || 0)); this.paint(this.selectedPiece, this.selectedFace); }
   setMaterialFilter(material) {
     for (const group of this.pieceGroups) group.style.display = !material || group.dataset.material === material ? "" : "none";
@@ -839,7 +906,7 @@ class PatternView {
 }
 
 class Viewer {
-  constructor(model, svgText) {
+  constructor(model, svgText, exportText) {
     this.model = model;
     const pick = (face, from) => this.select(face, from);
     const contextMenu = (face, x, y) => this.showFaceMenu(face, x, y);
@@ -967,6 +1034,32 @@ class Viewer {
     });
     this.setupPairWalk();
     this.setupFind();
+    this.setupLabels(exportText);
+  }
+  // PDF numbers or Cricut labels, on the pattern and in 3D. Cricut labels need the export SVG.
+  setupLabels(exportText) {
+    const select = document.getElementById("label-mode"), key = `fold3d-labels:${jsonUrl}`;
+    const doc = exportText && new DOMParser().parseFromString(exportText, "image/svg+xml");
+    if (!doc || doc.querySelector("parsererror")) {
+      select.disabled = true; select.title = `No Cricut export found (${exportUrl}); run make export`; return;
+    }
+    const byEdge = new Map(), pieces = new Map();
+    for (const text of doc.querySelectorAll("text[data-label]")) {
+      const piece = text.closest("g[data-piece]")?.getAttribute("data-piece");
+      if (text.hasAttribute("data-piece-number")) {
+        const frame = text.parentNode.querySelector(`path[data-piece-number="${CSS.escape(text.textContent)}"][data-mark="circle"], path[data-piece-number="${CSS.escape(text.textContent)}"][data-mark="square"]`);
+        pieces.set(piece, {number: text.textContent, frame: frame?.getAttribute("data-mark") || ""});
+      } else byEdge.set(`${piece}|${text.getAttribute("data-pdf-number")}`, text.getAttribute("data-label"));
+    }
+    const labels = {pieces, glue: g => byEdge.get(`${g.piece}|${g.number}`) || byEdge.get(`${g.tab_piece}|${g.number}`) || String(g.number)};
+    const apply = mode => {
+      this.pattern.setLabels(mode === "cricut" ? doc : null);
+      this.folded.setLabels(mode === "cricut" ? labels : null);
+      try { localStorage.setItem(key, mode); } catch (e) {}
+    };
+    try { select.value = localStorage.getItem(key) === "cricut" ? "cricut" : "pdf"; } catch (e) {}
+    apply(select.value);
+    select.addEventListener("change", () => apply(select.value));
   }
   // Step through the model one mirror pair at a time, those with the most open glues and
   // wrong-way folds first; pieces with no twin found come last, on their own.
@@ -1135,11 +1228,12 @@ class Viewer {
 }
 
 try {
-  const [data, svgText] = await Promise.all([
+  const [data, svgText, exportText] = await Promise.all([
     fetch(jsonUrl).then(r => { if (!r.ok) throw new Error(`${jsonUrl}: ${r.status}`); return r.json(); }),
     fetch(svgUrl).then(r => { if (!r.ok) throw new Error(`${svgUrl}: ${r.status}`); return r.text(); }),
+    fetch(exportUrl).then(r => r.ok ? r.text() : "").catch(() => ""),  // optional: Cricut labels
   ]);
-  window.viewer = new Viewer(new Model(data), svgText);
+  window.viewer = new Viewer(new Model(data), svgText, exportText);
   window.addEventListener("message", event => {
     if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
         event.data?.type !== "review-select-piece") return;

@@ -413,14 +413,14 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
                 return cx, cy
         return None
 
-    # Sized for the short label (chars), not the PDF number the text still holds. First centred on
-    # its side; for a fold, then centred on the other side (Helga: a tab label may sit on the piece);
-    # then slid along the edge; last, allowed past the outline, but never on top of another label.
+    # Sized for the short label (chars), not the PDF number the text still holds. First on its own
+    # side (a tab label on the tab), centred, then slid along the edge; only then the other side of
+    # a fold (Helga: a tab label may sit on the piece); last, allowed past the outline, but never on
+    # top of another label.
     slid = [a for k in (1, 2, 3, 4) for a in (at - 0.1 * k, at + 0.1 * k) if 0.08 < a < 0.92]
     size = sizes[0]
-    attempts = ([(at, side, True) for side in sides]
-                + [(a, side, True) for a in slid for side in sides]
-                + [(a, side, False) for a in [at] + slid for side in sides])
+    attempts = ([(a, side, True) for side in sides for a in [at] + slid]
+                + [(a, side, False) for side in sides for a in [at] + slid])
     placed, chosen = None, sides[0]
     for a_, side, inside in attempts:
         spot = fits(size, a_, side, inside)
@@ -430,7 +430,7 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
     if not placed:  # nowhere free: centred just off the edge
         placed = (size, mx + nx * (0.4 * size + 0.5), my + ny * (0.4 * size + 0.5))
     size, cx, cy = placed
-    half_w, half_h = 0.6 * size * chars / 2 + 0.3, 0.4 * size + 0.3  # with a little air round it
+    half_w, half_h = 0.6 * size * chars / 2 + 1.0, 0.4 * size + 0.3  # with air round it, more along the line so 4S 5F never read as one
     taken.append([(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
                   for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
     angle = math.degrees(math.atan2(nx, -ny))  # rotate(angle) turns the text's up (0,-1) onto (nx, ny)
