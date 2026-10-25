@@ -118,10 +118,13 @@
   <h1 id="title">Folded model</h1>
   <span class="stats" id="stats"></span>
   <button id="fit-view" type="button">Overview</button>
-  <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477 or 11-02"
-    aria-label="Find a glue number or a piece" title="A glue number shows both pieces it joins; a piece id shows that piece and its twin"></form>
+  <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477, 2T, or 11-02"
+    aria-label="Find a glue number, Cricut label, or piece" title="A Cricut label or glue number finds its paired pieces; a piece id shows that piece and its twin"></form>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
+  <label>3D numbers <select id="number-label-view" aria-label="3D number labels">
+    <option value="glue">Inside markers (Labels switch)</option><option value="cricut">Cricut labels on the faces</option><option value="ocr">OCR numbers on the faces</option>
+  </select></label>
   <button id="save-tabs" type="button" disabled title="Mark a face as a tab to enable this">Save tab marks &amp; re-glue</button>
   <progress id="tab-rebuild-progress" aria-label="Re-glue progress" hidden></progress>
   <label class="tint-control">Cardstock tint <input type="range" id="cardstock-tint" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
@@ -304,9 +307,99 @@ class Model {
   }
 }
 
+function pieceFlatOffset(group, faces) {
+  const facePoints = [...new Map(faces.flatMap(face => face.flat || [])
+    .map(point => [`${point[0]},${point[1]}`, point])).values()];
+  const piece = group.id;
+  const pathPoints = [...group.querySelectorAll(`g[id="${piece}-cut"] path`)]
+    .flatMap(path => [...path.getAttribute("d").matchAll(/([-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?)\s*,\s*([-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?)/gi)]
+      .map(match => [Number(match[1]), Number(match[2])]));
+  if (!facePoints.length || !pathPoints.length) return {x: 0, y: 0};
+  const bounds = points => points.reduce((box, point) => ({
+    minX: Math.min(box.minX, point[0]), maxX: Math.max(box.maxX, point[0]),
+    minY: Math.min(box.minY, point[1]), maxY: Math.max(box.maxY, point[1]),
+  }), {minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity});
+  const modelBounds = bounds(facePoints), svgBounds = bounds(pathPoints);
+  const offset = {
+    x: (modelBounds.minX + modelBounds.maxX - svgBounds.minX - svgBounds.maxX) / 2,
+    y: (modelBounds.minY + modelBounds.maxY - svgBounds.minY - svgBounds.maxY) / 2,
+  };
+  const allPathPoints = [...group.querySelectorAll("path")]
+    .flatMap(path => [...path.getAttribute("d").matchAll(/([-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?)\s*,\s*([-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?)/gi)]
+      .map(match => [Number(match[1]), Number(match[2])]));
+  const matches = [];
+  for (const point of facePoints) {
+    let nearest = null, distance = Infinity;
+    for (const pathPoint of allPathPoints) {
+      const d = Math.hypot(point[0] - pathPoint[0] - offset.x, point[1] - pathPoint[1] - offset.y);
+      if (d < distance) { distance = d; nearest = pathPoint; }
+    }
+    if (nearest && distance < 5) matches.push([point[0] - nearest[0], point[1] - nearest[1]]);
+  }
+  if (matches.length < 3) return offset;
+  const median = values => {
+    values.sort((a, b) => a - b);
+    const middle = Math.floor(values.length / 2);
+    return values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2;
+  };
+  return {x: median(matches.map(match => match[0])), y: median(matches.map(match => match[1]))};
+}
+
+function readPrintLabels(svgText, cricutRows, model) {
+  const cricut = new Map();
+  for (const row of cricutRows) for (const piece of (row.pieces || "").split(/\s+/).filter(Boolean))
+    cricut.set(`${piece}|${row.pdf_number}`, row.label);
+  const doc = new DOMParser().parseFromString(svgText, "image/svg+xml"), labels = [];
+  for (const group of doc.querySelectorAll('g[id^="piece-"][data-material]')) {
+    const piece = group.id;
+    // The 2D sheet layout may have moved since fold3d.json was last rebuilt.
+    // Align this piece's current SVG coordinates to the coordinates of its 3D faces.
+    const offset = pieceFlatOffset(group, model.faces.filter(face => face.piece === piece));
+    for (const node of group.querySelectorAll(`g[id="${piece}-draw"] text`)) {
+      const text = node.textContent.trim(), x = Number(node.getAttribute("x")), y = Number(node.getAttribute("y"));
+      if (!text || !Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
+      const size = Number(node.getAttribute("font-size")) || 2;
+      labels.push({piece, text, cricut: /^\d+$/.test(text) ? (cricut.get(`${piece}|${text}`) || "") : "",
+        x: x + offset.x, y: y + offset.y, angle: THREE.MathUtils.degToRad(angle), size});
+    }
+  }
+  return labels;
+}
+
+function flatBarycentric(p, a, b, c) {
+  const v0 = [b[0] - a[0], b[1] - a[1]], v1 = [c[0] - a[0], c[1] - a[1]], v2 = [p[0] - a[0], p[1] - a[1]];
+  const den = v0[0] * v1[1] - v1[0] * v0[1];
+  if (Math.abs(den) < 1e-9) return null;
+  const v = (v2[0] * v1[1] - v1[0] * v2[1]) / den;
+  const w = (v0[0] * v2[1] - v2[0] * v0[1]) / den;
+  return [1 - v - w, v, w];
+}
+
+function labelTextureAtlas(labels) {
+  const strings = [...new Set(labels.flatMap(label => [label.text, label.cricut]).filter(Boolean))];
+  if (!strings.length) return null;
+  const cellWidth = 96, cellHeight = 48, columns = 12, rows = Math.ceil(strings.length / columns);
+  const canvas = document.createElement("canvas");
+  canvas.width = columns * cellWidth; canvas.height = rows * cellHeight;
+  const context = canvas.getContext("2d"), slots = new Map();
+  context.font = "bold 32px Arial, sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
+  strings.forEach((text, i) => {
+    const column = i % columns, row = Math.floor(i / columns), x = (column + 0.5) * cellWidth, y = (row + 0.5) * cellHeight;
+    context.lineJoin = "round"; context.lineWidth = 5; context.strokeStyle = "white"; context.fillStyle = "#171717";
+    context.strokeText(text, x, y, cellWidth - 8); context.fillText(text, x, y, cellWidth - 8);
+    slots.set(text, {column, row});
+  });
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace; texture.generateMipmaps = false;
+  texture.minFilter = THREE.LinearFilter; texture.magFilter = THREE.LinearFilter;
+  return {texture, slots, cellWidth, cellHeight, columns, rows};
+}
+
 class FoldedView {
-  constructor(el, model, onPick, onContextMenu) {
+  constructor(el, model, labels, onPick, onContextMenu) {
     this.model = model; this.onPick = onPick; this.onContextMenu = onContextMenu;
+    this.labels = labels; this.backTint = 55;
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(devicePixelRatio);
     el.prepend(this.renderer.domElement);
@@ -319,7 +412,7 @@ class FoldedView {
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
     const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(1, 2, 3);
     this.camera.add(sun); this.scene.add(this.camera);
-    this.buildMesh(); this.buildLines();
+    this.buildMesh(); this.buildLabelMeshes(); this.buildLines();
     this.fit();
     document.getElementById("fit-view").addEventListener("click", () => this.fitMirrorCenter());
     document.querySelectorAll("#orbit-pad [data-turn]").forEach(button =>
@@ -437,6 +530,81 @@ class FoldedView {
     }
     this.setMaterialFilter(this.material ?? "");
   }
+  buildLabelMeshes() {
+    this.labelAtlas = labelTextureAtlas(this.labels);
+    this.labelMeshes = {ocr: null, cricut: null};
+    if (!this.labelAtlas) return;
+    for (const mode of ["ocr", "cricut"]) {
+      const positions = [], uvs = [], indices = [];
+      for (const label of this.labels) {
+        const text = mode === "ocr" ? (/^\d+$/.test(label.text) ? label.text : "") : label.cricut;
+        const slot = this.labelAtlas.slots.get(text);
+        if (!text || !slot) continue;
+        const mapped = this.mapLabel(label);
+        if (!mapped) continue;
+        const {point, xAxis, normal, worldAt} = mapped;
+        const pageDown = worldAt([label.x, label.y + 1]).sub(point).normalize();
+        const yAxis = normal.clone().cross(xAxis).normalize();
+        if (yAxis.dot(pageDown) > 0) yAxis.negate();
+        const height = Math.max(label.size, 1.2);
+        const width = Math.max(height * 0.55, Math.min(height * text.length * 0.62, height * 2.6));
+        const u0 = (slot.column * this.labelAtlas.cellWidth + 5) / this.labelAtlas.texture.image.width;
+        const u1 = ((slot.column + 1) * this.labelAtlas.cellWidth - 5) / this.labelAtlas.texture.image.width;
+        const vTop = 1 - (slot.row * this.labelAtlas.cellHeight + 3) / this.labelAtlas.texture.image.height;
+        const vBottom = 1 - ((slot.row + 1) * this.labelAtlas.cellHeight - 3) / this.labelAtlas.texture.image.height;
+        for (const [side, flip] of [[1, false], [-1, true]]) {
+          const center = point.clone().addScaledVector(normal, side * 0.08);
+          const hx = xAxis.clone().multiplyScalar(width / 2), hy = yAxis.clone().multiplyScalar(height / 2);
+          const corners = [center.clone().sub(hx).sub(hy), center.clone().add(hx).sub(hy),
+            center.clone().add(hx).add(hy), center.clone().sub(hx).add(hy)];
+          const base = positions.length / 3;
+          corners.forEach(p => positions.push(p.x, p.y, p.z));
+          const left = flip ? u1 : u0, right = flip ? u0 : u1;
+          uvs.push(left, vBottom, right, vBottom, right, vTop, left, vTop);
+          indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+        }
+      }
+      if (!positions.length) continue;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex(indices); geometry.computeBoundingSphere();
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({map: this.labelAtlas.texture,
+        transparent: true, alphaTest: 0.04, side: THREE.DoubleSide, depthWrite: false,
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1}));
+      mesh.visible = false; this.scene.add(mesh); this.labelMeshes[mode] = mesh;
+    }
+  }
+  mapLabel(label) {
+    const candidates = [];
+    for (const face of this.model.faces) {
+      if (face.piece !== label.piece || !face.flat || face.flat.length !== face.v.length) continue;
+      for (let k = 1; k + 1 < face.v.length; k++) {
+        const ids = [0, k, k + 1], flat = ids.map(i => face.flat[i]);
+        const bary = flatBarycentric([label.x, label.y], ...flat);
+        if (!bary) continue;
+        const outside = bary.reduce((sum, v) => sum + Math.max(0, -v), 0);
+        candidates.push({outside, flat, world: ids.map(i => new THREE.Vector3(...this.model.vertices[face.v[i]]))});
+      }
+    }
+    candidates.sort((a, b) => a.outside - b.outside);
+    const best = candidates[0];
+    if (!best || best.outside > 0.7) return null;
+    const map = p => {
+      const b = flatBarycentric(p, ...best.flat);
+      return best.world[0].clone().multiplyScalar(b[0]).addScaledVector(best.world[1], b[1]).addScaledVector(best.world[2], b[2]);
+    };
+    const point = map([label.x, label.y]);
+    const anglePoint = map([label.x + Math.cos(label.angle), label.y + Math.sin(label.angle)]);
+    const xAxis = anglePoint.sub(point).normalize();
+    const normal = best.world[1].clone().sub(best.world[0]).cross(best.world[2].clone().sub(best.world[0])).normalize();
+    return {point, xAxis, normal, worldAt: p => map(p)};
+  }
+  setLabelMode(mode) {
+    for (const [key, mesh] of Object.entries(this.labelMeshes)) if (mesh) mesh.visible = key === mode;
+    this.numbers.visible = mode === "glue";
+  }
+  setBackTint(strength) { this.backTint = Math.max(0, Math.min(100, Number(strength) || 0)); this.paint(this.selectedPiece, this.selectedFace); }
   buildLines() {
     const css = getComputedStyle(document.documentElement);
     const edgeKey = (a, b) => a < b ? `${a}:${b}` : `${b}:${a}`;
@@ -485,12 +653,13 @@ class FoldedView {
       }
     }
     const c = this.mesh.geometry.attributes.color, ci = this.inner.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
+    const white = new THREE.Color(0xffffff), tintMix = 1 - this.backTint / 100;
     this.triFace.forEach((f, t) => {
       let colour = this.base[f].clone();
       if (f === face || relatedFaces.has(f)) colour = pick.clone();
       else if (piece && this.model.faces[f].piece === piece) colour.lerp(pick, 0.45);
       else if (this.relatedPieces?.includes(this.model.faces[f].piece)) colour.lerp(pick, 0.45);
-      const pale = colour.clone().lerp(new THREE.Color(0xffffff), 0.45);
+      const pale = colour.clone().lerp(white, tintMix);
       for (let k = 0; k < 3; k++) {
         c.setXYZ(3 * t + k, colour.r, colour.g, colour.b);
         ci.setXYZ(3 * t + k, pale.r, pale.g, pale.b);
@@ -691,13 +860,17 @@ class PatternView {
     this.full = this.svg.getAttribute("viewBox").split(/[\s,]+/).map(Number);
     this.view = [...this.full];
     this.overlay = document.createElementNS(SVGNS, "g");
+    this.pieceGroups = [...this.svg.querySelectorAll('g[id^="piece-"][data-material]')];
+    this.pieceGroupsById = new Map(this.pieceGroups.map(group => [group.id, group]));
+    this.pieceOffsets = new Map(this.pieceGroups.map(group => [group.id,
+      pieceFlatOffset(group, (this.model.facesOf.get(group.id) || []).map(i => this.model.faces[i]))]));
     this.polys = model.faces.map((f, i) => {
       const p = document.createElementNS(SVGNS, "polygon");
-      p.setAttribute("points", f.flat.map(xy => xy.join(",")).join(" "));
+      const offset = this.pieceOffsets.get(f.piece) || {x: 0, y: 0};
+      p.setAttribute("points", f.flat.map(([x, y]) => `${x + offset.x},${y + offset.y}`).join(" "));
       p.setAttribute("fill", "transparent"); p.setAttribute("stroke", "none");
       p.dataset.face = i; this.overlay.append(p); return p;
     });
-    this.pieceGroups = [...this.svg.querySelectorAll('g[id^="piece-"][data-material]')];
     this.svg.append(this.overlay);
     this.found = el.querySelector("#found"); this.cropped = new Set();
     this.found.querySelector("#found-close").addEventListener("click", () => {
@@ -756,6 +929,14 @@ class PatternView {
     }
   }
   setTint(strength) { this.tintStrength = Math.max(0, Math.min(100, Number(strength) || 0)); this.paint(this.selectedPiece, this.selectedFace); }
+  fitGroups(groups, padding) {
+    const boxes = groups.map(group => group.getBBox()).filter(box => box.width || box.height);
+    if (!boxes.length) return;
+    const minX = Math.min(...boxes.map(box => box.x)), minY = Math.min(...boxes.map(box => box.y));
+    const maxX = Math.max(...boxes.map(box => box.x + box.width)), maxY = Math.max(...boxes.map(box => box.y + box.height));
+    const width = maxX - minX, height = maxY - minY, pad = padding * Math.max(width, height, 40);
+    this.setView([minX - pad, minY - pad, width + 2 * pad, height + 2 * pad]);
+  }
   setMaterialFilter(material) {
     for (const group of this.pieceGroups) group.style.display = !material || group.dataset.material === material ? "" : "none";
     this.polys.forEach((polygon, i) => {
@@ -763,15 +944,8 @@ class PatternView {
       polygon.style.display = !material || this.model.pieces[piece].material === material ? "" : "none";
     });
     this.clipScans(material);
-    if (material) {
-      const faces = this.model.faces.filter(f => this.model.pieces[f.piece].material === material);
-      const xs = faces.flatMap(f => f.flat.map(p => p[0])), ys = faces.flatMap(f => f.flat.map(p => p[1]));
-      if (xs.length) {
-        const pad = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) * 0.06;
-        this.setView([Math.min(...xs) - pad, Math.min(...ys) - pad,
-          Math.max(...xs) - Math.min(...xs) + 2 * pad, Math.max(...ys) - Math.min(...ys) + 2 * pad]);
-      }
-    } else this.setView([...this.full]);
+    if (material) this.fitGroups(this.pieceGroups.filter(group => group.dataset.material === material), 0.06);
+    else this.setView([...this.full]);
     this.hideCrops();
   }
   // With a cardstock filter the page scans show only inside that cardstock's cut outlines,
@@ -793,10 +967,8 @@ class PatternView {
   focus(piece) {
     if (!this.found.hidden && [piece].flat().every(p => this.cropped.has(p))) return;
     this.hideCrops();
-    const xs = [], ys = [];
-    for (const i of [piece].flat().flatMap(p => this.model.facesOf.get(p) || [])) for (const [x, y] of this.model.faces[i].flat) { xs.push(x); ys.push(y); }
-    const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys), pad = 0.4 * Math.max(w, h, 40);
-    this.setView([Math.min(...xs) - pad, Math.min(...ys) - pad, w + 2 * pad, h + 2 * pad]);
+    const groups = [piece].flat().map(id => this.pieceGroupsById.get(id)).filter(Boolean);
+    this.fitGroups(groups, 0.4);
   }
   // Only these pieces, each cut from its page scan to the box around it, side by side; a glue's
   // edge is drawn on both pieces. The full pattern comes back with "Show all pages" or a new view.
@@ -806,12 +978,14 @@ class PatternView {
     const flatOf = (piece, vertex) => {
       for (const i of this.model.facesOf.get(piece) || []) {
         const k = this.model.faces[i].v.indexOf(vertex);
-        if (k >= 0) return this.model.faces[i].flat[k];
+        if (k >= 0) { const [x, y] = this.model.faces[i].flat[k], o = this.pieceOffsets.get(piece) || {x: 0, y: 0}; return [x + o.x, y + o.y]; }
       }
     };
     for (const piece of new Set(pieces)) {
       const faces = this.model.facesOf.get(piece) || [];
-      const xs = faces.flatMap(i => this.model.faces[i].flat.map(p => p[0])), ys = faces.flatMap(i => this.model.faces[i].flat.map(p => p[1]));
+      // In the SVG's coordinates, as fold3d.json may hold an older page layout (see pieceFlatOffset).
+      const o = this.pieceOffsets.get(piece) || {x: 0, y: 0};
+      const xs = faces.flatMap(i => this.model.faces[i].flat.map(p => p[0] + o.x)), ys = faces.flatMap(i => this.model.faces[i].flat.map(p => p[1] + o.y));
       if (!xs.length) continue;
       const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, h = Math.max(...ys) - y0;
       const pad = 0.06 * Math.max(w, h, 10), view = [x0 - pad, y0 - pad, w + 2 * pad, h + 2 * pad];
@@ -923,11 +1097,12 @@ class PatternView {
 }
 
 class Viewer {
-  constructor(model, svgText, exportText) {
+  constructor(model, svgText, exportText, labels, cricutRows) {
     this.model = model;
+    this.cricutRows = cricutRows;
     const pick = (face, from) => this.select(face, from);
     const contextMenu = (face, x, y) => this.showFaceMenu(face, x, y);
-    this.folded = new FoldedView(document.getElementById("three"), model, pick, contextMenu);
+    this.folded = new FoldedView(document.getElementById("three"), model, labels, pick, contextMenu);
     this.pattern = new PatternView(document.getElementById("pattern"), model, svgText, pick, contextMenu);
     const materialFilter = document.getElementById("material-filter");
     const materials = [...new Set(Object.values(model.pieces).map(piece => piece.material))].sort();
@@ -947,6 +1122,12 @@ class Viewer {
     // Overview is also the opening camera pose. Do this after restoring the saved
     // material filter, whose own fit would otherwise pull the camera off center.
     this.folded.fitMirrorCenter();
+    const numberMode = document.getElementById("number-label-view");
+    const hasCricutLabels = labels.some(label => label.cricut);
+    numberMode.querySelector('[value="cricut"]').disabled = !hasCricutLabels;
+    numberMode.value = "glue";
+    this.folded.setLabelMode(numberMode.value);
+    numberMode.addEventListener("change", e => this.folded.setLabelMode(e.target.value));
     materialFilter.addEventListener("change", e => applyMaterialFilter(e.target.value));
     const tintControl = document.getElementById("cardstock-tint");
     const tabSave = document.getElementById("save-tabs");
@@ -995,8 +1176,10 @@ class Viewer {
     tintControl.value = String(initialTint);
     document.getElementById("cardstock-tint-value").textContent = `${initialTint}%`;
     this.pattern.setTint(initialTint);
+    this.folded.setBackTint(initialTint);
     tintControl.addEventListener("input", e => {
       this.pattern.setTint(e.target.value);
+      this.folded.setBackTint(e.target.value);
       document.getElementById("cardstock-tint-value").textContent = `${e.target.value}%`;
       localStorage.setItem(tintKey, e.target.value);
     });
@@ -1126,7 +1309,7 @@ class Viewer {
       if (step) { e.preventDefault(); this.showPair(step); }
     });
   }
-  // Find a glue by its number (both pieces it joins) or a piece by its id (with its twin).
+  // Find a Cricut label, glue by its number, or piece by its id.
   setupFind() {
     const input = document.getElementById("find-text");
     // Clearing the box (its ✕ or emptying it) tints every piece again and brings back all pages.
@@ -1141,31 +1324,39 @@ class Viewer {
       const text = input.value.trim().toLowerCase();
       if (!text) { showAll(); return; }
       const id = text.match(/^(?:piece-)?(\d\d)-(\d\d)$/), piece = id && `piece-${id[1]}-${id[2]}`;
-      let pieces = [], glue = null;
+      let pieces = [], glue = null, cricutLabel = "";
       if (piece && this.model.facesOf.has(piece)) {
         pieces = [piece, this.model.pieces[piece]?.twin].filter(p => p && this.model.facesOf.has(p));
       } else {
-        glue = this.model.glues.find(g => String(g.number).toLowerCase() === text);
-        if (glue) pieces = [glue.piece, glue.tab_piece];
+        const labelRow = this.cricutRows.find(row => row.label?.toLowerCase() === text);
+        const labelPieces = labelRow?.pieces?.split(/\s+/).filter(p => this.model.facesOf.has(p)) || [];
+        if (labelRow && labelPieces.length) {
+          cricutLabel = labelRow.label;
+          pieces = [...new Set(labelPieces)];
+        } else {
+          glue = this.model.glues.find(g => String(g.number).toLowerCase() === text);
+          if (glue) pieces = [glue.piece, glue.tab_piece];
+        }
       }
       if (!pieces.length) {
         document.getElementById("viewer-status").textContent = `Nothing called ${input.value.trim()}.`;
         return;
       }
-      const [first, other] = pieces;
+      const [first, ...otherPieces] = pieces, other = otherPieces[0];
       const filter = document.getElementById("material-filter");
       if (filter.value && pieces.some(p => this.model.pieces[p]?.material !== filter.value)) {
         filter.value = ""; filter.dispatchEvent(new Event("change"));
       }
-      this.folded.relatedPieces = other ? [other] : [];
+      this.folded.relatedPieces = otherPieces;
       this.pattern.only = new Set(pieces);
       this.folded.paint(first, null); this.pattern.paint(first, null);
       const found = glue
         ? `Glue ${glue.number}: ${glue.piece} (edge) ↔ ${glue.tab_piece} (tab), ${glue.status}, ${glue.gap_mm} mm`
-        : `${first}${other ? ` and its twin ${other}` : ""}`;
+        : cricutLabel ? `Cricut label ${cricutLabel}: ${pieces.join(" and ")}`
+          : `${first}${other ? ` and its twin ${other}` : ""}`;
       this.folded.focusPiece(pieces); this.pattern.showCrops(pieces, glue, found);
       this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
-      if (other) this.describe(this.model.faces[this.model.facesOf.get(other)[0]], true);
+      for (const related of otherPieces) this.describe(this.model.faces[this.model.facesOf.get(related)[0]], true);
       document.getElementById("viewer-status").textContent = found;
     });
   }
@@ -1245,12 +1436,15 @@ class Viewer {
 }
 
 try {
-  const [data, svgText, exportText] = await Promise.all([
+  const labelsUrl = modelName ? `/api/labels?model=${encodeURIComponent(modelName)}` : "";
+  const [data, svgText, exportText, cricutRows] = await Promise.all([
     fetch(jsonUrl).then(r => { if (!r.ok) throw new Error(`${jsonUrl}: ${r.status}`); return r.json(); }),
     fetch(svgUrl).then(r => { if (!r.ok) throw new Error(`${svgUrl}: ${r.status}`); return r.text(); }),
     fetch(exportUrl).then(r => r.ok ? r.text() : "").catch(() => ""),  // optional: Cricut labels
+    labelsUrl ? fetch(labelsUrl).then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
   ]);
-  window.viewer = new Viewer(new Model(data), svgText, exportText);
+  const model = new Model(data);
+  window.viewer = new Viewer(model, svgText, exportText, readPrintLabels(svgText, cricutRows, model), cricutRows);
   window.addEventListener("message", event => {
     if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
         event.data?.type !== "review-select-piece") return;
