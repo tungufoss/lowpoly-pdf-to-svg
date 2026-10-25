@@ -85,6 +85,18 @@
   #three { background: #d4d8de; }
   #three .hint { left: 122px; right: 8px; font-size: 11px; color: #4d4c48; background: #d4d8decc; }
   #pattern .hint { color: #6b6a66; background: #e8efffcc; }
+  /* After a find: just the pieces found, each cut from its page scan, side by side. */
+  #found { position: absolute; inset: 0; z-index: 5; display: grid; grid-template-rows: auto 1fr;
+    background: #e8efff; color: #1d1d1b; cursor: default; }
+  #found[hidden] { display: none; }
+  #found-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 10px; }
+  #found-head button { font: inherit; padding: 2px 8px; border: 1px solid #c9c7c0; border-radius: 5px;
+    background: #fff; color: #1d1d1b; cursor: pointer; }
+  #found-crops { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 8px; padding: 0 8px 8px; min-height: 0; }
+  #found-crops figure { margin: 0; display: grid; grid-template-rows: auto 1fr; min-height: 0; min-width: 0;
+    background: #fff; border: 1px solid #c9c7c0; border-radius: 6px; overflow: hidden; }
+  #found-crops figcaption { padding: 3px 8px; font-size: 12px; color: #4d4c48; }
+  #found-crops polygon[data-face] { cursor: pointer; }
   footer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px; min-height: 64px;
     max-height: 30vh; overflow: auto; }
   footer h2 { font-size: 14px; margin: 0 0 4px; }
@@ -140,6 +152,10 @@
     <button type="button" data-collapse="pattern" title="Hide the pattern (3D model full width)">▶</button>
   </div>
   <div class="pane" id="pattern"><div class="hint">drag to pan · scroll to zoom · click a face</div>
+    <section id="found" aria-label="Pieces found" hidden>
+      <div id="found-head"><span id="found-label"></span><button id="found-close" type="button">Show all pages</button></div>
+      <div id="found-crops"></div>
+    </section>
     <section id="piece-editor" role="dialog" aria-modal="false" aria-labelledby="piece-editor-title" hidden>
       <div id="piece-editor-card">
         <div id="piece-editor-head"><h2 id="piece-editor-title">Edit piece</h2><button id="close-piece-editor" type="button">Close</button></div>
@@ -648,6 +664,11 @@ class PatternView {
     });
     this.pieceGroups = [...this.svg.querySelectorAll('g[id^="piece-"][data-material]')];
     this.svg.append(this.overlay);
+    this.found = el.querySelector("#found"); this.cropped = new Set();
+    this.found.querySelector("#found-close").addEventListener("click", () => {
+      this.hideCrops(); this.setView([...this.full]);
+      el.dispatchEvent(new CustomEvent("found-closed"));
+    });
     this.listen();
   }
   paint(piece, face) {
@@ -665,6 +686,12 @@ class PatternView {
       p.setAttribute("stroke", i === face ? "#1f6feb" : "none");
       p.setAttribute("stroke-width", "0.6");
     });
+    for (const c of this.cropPolys || []) {
+      const p = this.polys[c.dataset.face];
+      for (const a of ["fill", "stroke", "stroke-width"]) c.setAttribute(a, p.getAttribute(a));
+      // lighter than on the pattern, so the numbers on the scan underneath stay readable
+      c.setAttribute("fill-opacity", String(Math.min(0.3, Number(p.getAttribute("fill-opacity")) || 0)));
+    }
   }
   setTint(strength) { this.tintStrength = Math.max(0, Math.min(100, Number(strength) || 0)); this.paint(this.selectedPiece, this.selectedFace); }
   setMaterialFilter(material) {
@@ -682,12 +709,81 @@ class PatternView {
           Math.max(...xs) - Math.min(...xs) + 2 * pad, Math.max(...ys) - Math.min(...ys) + 2 * pad]);
       }
     } else this.setView([...this.full]);
+    this.hideCrops();
   }
   focus(piece) {
+    if (!this.found.hidden && [piece].flat().every(p => this.cropped.has(p))) return;
+    this.hideCrops();
     const xs = [], ys = [];
     for (const i of [piece].flat().flatMap(p => this.model.facesOf.get(p) || [])) for (const [x, y] of this.model.faces[i].flat) { xs.push(x); ys.push(y); }
     const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys), pad = 0.4 * Math.max(w, h, 40);
     this.setView([Math.min(...xs) - pad, Math.min(...ys) - pad, w + 2 * pad, h + 2 * pad]);
+  }
+  // Only these pieces, each cut from its page scan to the box around it, side by side; a glue's
+  // edge is drawn on both pieces. The full pattern comes back with "Show all pages" or a new view.
+  showCrops(pieces, glue, label) {
+    const box = this.found.querySelector("#found-crops");
+    box.replaceChildren(); this.cropPolys = []; this.cropped = new Set(pieces);
+    const flatOf = (piece, vertex) => {
+      for (const i of this.model.facesOf.get(piece) || []) {
+        const k = this.model.faces[i].v.indexOf(vertex);
+        if (k >= 0) return this.model.faces[i].flat[k];
+      }
+    };
+    for (const piece of new Set(pieces)) {
+      const faces = this.model.facesOf.get(piece) || [];
+      const xs = faces.flatMap(i => this.model.faces[i].flat.map(p => p[0])), ys = faces.flatMap(i => this.model.faces[i].flat.map(p => p[1]));
+      if (!xs.length) continue;
+      const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, h = Math.max(...ys) - y0;
+      const pad = 0.06 * Math.max(w, h, 10), view = [x0 - pad, y0 - pad, w + 2 * pad, h + 2 * pad];
+      const svg = document.createElementNS(SVGNS, "svg");
+      svg.setAttribute("viewBox", view.join(" ")); svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+      const clip = document.createElementNS(SVGNS, "clipPath"), rect = document.createElementNS(SVGNS, "rect");
+      clip.id = `found-clip-${piece}`;
+      [["x", view[0]], ["y", view[1]], ["width", view[2]], ["height", view[3]]].forEach(([k, v]) => rect.setAttribute(k, v));
+      clip.append(rect); svg.append(clip);
+      const scans = document.createElementNS(SVGNS, "g"); scans.setAttribute("clip-path", `url(#${clip.id})`);
+      for (const img of this.svg.querySelectorAll("image")) {
+        const [ix, iy, iw, ih] = ["x", "y", "width", "height"].map(a => Number(img.getAttribute(a)) || 0);
+        if (ix < view[0] + view[2] && ix + iw > view[0] && iy < view[1] + view[3] && iy + ih > view[1]) {
+          const copy = img.cloneNode(); copy.removeAttribute("id"); scans.append(copy);
+        }
+      }
+      svg.append(scans);
+      const group = this.svg.querySelector(`g[id="${CSS.escape(piece)}"]`);
+      if (group) {
+        const copy = group.cloneNode(true); copy.style.display = "";
+        copy.removeAttribute("id"); copy.querySelectorAll("[id]").forEach(n => n.removeAttribute("id"));
+        svg.append(copy);
+      }
+      for (const i of faces) {
+        const p = this.polys[i].cloneNode(); p.style.display = ""; svg.append(p); this.cropPolys.push(p);
+      }
+      if (glue) {
+        const ends = glue.piece === piece ? [glue.v[0], glue.v[1]] : [glue.v[2], glue.v[3]];
+        const [a, b] = ends.map(v => flatOf(piece, v));
+        if (a && b) {
+          const line = document.createElementNS(SVGNS, "line");
+          [["x1", a[0]], ["y1", a[1]], ["x2", b[0]], ["y2", b[1]]].forEach(([k, v]) => line.setAttribute(k, v));
+          line.setAttribute("stroke", "#d1242f"); line.setAttribute("stroke-width", String(0.015 * Math.max(w, h, 10)));
+          line.setAttribute("stroke-linecap", "round"); line.setAttribute("pointer-events", "none");
+          svg.append(line);
+        }
+      }
+      const figure = document.createElement("figure"), caption = document.createElement("figcaption");
+      const role = glue ? (glue.piece === glue.tab_piece ? " (edge and tab)" : piece === glue.piece ? " (edge)" : " (tab)") : "";
+      caption.textContent = `${piece}${role} · ${this.model.pieces[piece]?.material || ""}`;
+      figure.append(caption, svg); box.append(figure);
+    }
+    this.found.querySelector("#found-label").textContent = label;
+    this.found.hidden = false; this.svg.style.visibility = "hidden";
+    this.paint(this.selectedPiece, this.selectedFace);
+  }
+  hideCrops() {
+    if (this.found.hidden) return;
+    this.found.hidden = true; this.svg.style.visibility = "";
+    this.cropPolys = []; this.cropped = new Set();
+    this.found.querySelector("#found-crops").replaceChildren();
   }
   setView(v) { this.view = v; this.svg.setAttribute("viewBox", v.join(" ")); }
   toSvg(e) {
@@ -700,6 +796,17 @@ class PatternView {
     // The Piece Review panel sits inside this pane: its buttons and page get their own pointer
     // events (capturing the pointer here would swallow the click on Close).
     const inEditor = e => e.target.closest?.("#piece-editor");
+    // The cut-out pieces after a find take clicks on their faces but don't pan or zoom the pattern.
+    this.found.addEventListener("click", e => {
+      const face = e.target.closest?.("polygon[data-face]");
+      if (face) this.onPick(Number(face.dataset.face), "svg");
+    });
+    this.found.addEventListener("contextmenu", e => {
+      e.preventDefault(); e.stopPropagation();
+      const face = e.target.closest?.("polygon[data-face]");
+      if (face) this.onContextMenu(Number(face.dataset.face), e.clientX, e.clientY);
+    });
+    for (const type of ["wheel", "pointerdown", "dblclick"]) this.found.addEventListener(type, e => e.stopPropagation());
     this.el.addEventListener("contextmenu", e => {
       if (inEditor(e)) return;
       e.preventDefault();
@@ -917,13 +1024,17 @@ class Viewer {
   // Find a glue by its number (both pieces it joins) or a piece by its id (with its twin).
   setupFind() {
     const input = document.getElementById("find-text");
-    // Clearing the box (its ✕ or emptying it) tints every piece again.
-    input.addEventListener("input", () => { if (!input.value.trim() && this.pattern.only) {
-      this.pattern.only = null; this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace); } });
+    // Clearing the box (its ✕ or emptying it) tints every piece again and brings back all pages.
+    const showAll = () => {
+      this.pattern.only = null; this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace);
+      if (!this.pattern.found.hidden) { this.pattern.hideCrops(); this.pattern.setView([...this.pattern.full]); }
+    };
+    input.addEventListener("input", () => { if (!input.value.trim()) showAll(); });
+    this.pattern.el.addEventListener("found-closed", () => { input.value = ""; showAll(); });
     document.getElementById("find").addEventListener("submit", e => {
       e.preventDefault();
       const text = input.value.trim().toLowerCase();
-      if (!text) { this.pattern.only = null; this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace); return; }
+      if (!text) { showAll(); return; }
       const id = text.match(/^(?:piece-)?(\d\d)-(\d\d)$/), piece = id && `piece-${id[1]}-${id[2]}`;
       let pieces = [], glue = null;
       if (piece && this.model.facesOf.has(piece)) {
@@ -944,12 +1055,13 @@ class Viewer {
       this.folded.relatedPieces = other ? [other] : [];
       this.pattern.only = new Set(pieces);
       this.folded.paint(first, null); this.pattern.paint(first, null);
-      this.folded.focusPiece(pieces); this.pattern.focus(pieces);
-      this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
-      if (other) this.describe(this.model.faces[this.model.facesOf.get(other)[0]], true);
-      document.getElementById("viewer-status").textContent = glue
+      const found = glue
         ? `Glue ${glue.number}: ${glue.piece} (edge) ↔ ${glue.tab_piece} (tab), ${glue.status}, ${glue.gap_mm} mm`
         : `${first}${other ? ` and its twin ${other}` : ""}`;
+      this.folded.focusPiece(pieces); this.pattern.showCrops(pieces, glue, found);
+      this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
+      if (other) this.describe(this.model.faces[this.model.facesOf.get(other)[0]], true);
+      document.getElementById("viewer-status").textContent = found;
     });
   }
   showPair(step) {
