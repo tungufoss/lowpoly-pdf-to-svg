@@ -606,6 +606,7 @@ const segDist = (q, a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], l = dx 
 let mode = "add", foldKind = "valley";
 const TWIN_FIT_MM = 1;    // paired corners further apart than this (rms) are not mirror copies; refuse to copy
 const TWIN_SNAP_MM = 1.5; // a copied end lands on the twin's own corner or fold end this close
+const pieceZoom = {};      // piece -> how far its drawing is zoomed and panned
 const copyNotes = {};     // piece -> what the last copy onto it did, shown on its next drawing only
 const hasEdits = f => f.add.length || f.drop.length || f.move.length || f.pointDrop.length || f.numbers.length;
 // Mirror one piece's edits onto its twin: lay the traced outline onto the twin's (a reflection), map
@@ -873,6 +874,35 @@ function pieceCard(q, list, rerender) {
   list.appendChild(el);
   delete copyNotes[q.piece];
   const svg = el.querySelector("svg"), clicks = el.querySelector(".clicks"), how = el.querySelector(".how");
+  // Zoom (scroll) and pan (drag) the scan and drawing together; scrolling all the way out fits again.
+  // The view is kept per piece, so an edit does not throw it away.
+  const scan = el.querySelector(".scan"), layers = [scan.querySelector("img"), svg];
+  const zoom = pieceZoom[q.piece] ??= {k: 1, x: 0, y: 0};
+  const applyZoom = () => layers.forEach(n => { n.style.transformOrigin = "0 0";
+    n.style.transform = `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.k})`; });
+  applyZoom();
+  scan.addEventListener("wheel", e => {
+    e.preventDefault();
+    const box = scan.getBoundingClientRect(), px = e.clientX - box.left, py = e.clientY - box.top;
+    const k = Math.min(20, Math.max(1, zoom.k * Math.exp(-e.deltaY * 0.0015))), f = k / zoom.k;
+    zoom.x = px - (px - zoom.x) * f; zoom.y = py - (py - zoom.y) * f; zoom.k = k;
+    if (k === 1) { zoom.x = 0; zoom.y = 0; }
+    applyZoom();
+  }, {passive: false});
+  let pan = null, panned = false;
+  scan.addEventListener("pointerdown", e => {
+    if (dragging || e.button > 1) return;   // a corner being moved keeps the pointer
+    pan = {x: e.clientX, y: e.clientY, zx: zoom.x, zy: zoom.y, id: e.pointerId}; panned = false;
+  });
+  scan.addEventListener("pointermove", e => {
+    if (!pan || dragging) return;
+    const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+    if (!panned && Math.hypot(dx, dy) < 5) return;
+    if (!panned) { panned = true; scan.setPointerCapture(pan.id); }
+    zoom.x = pan.zx + dx; zoom.y = pan.zy + dy; applyZoom();
+  });
+  scan.addEventListener("pointerup", () => { pan = null; });
+  scan.addEventListener("click", e => { if (panned) { e.stopPropagation(); e.preventDefault(); panned = false; } }, true);
   const kind = el.querySelector("select");
   kind.value = foldKind; kind.addEventListener("change", () => { foldKind = kind.value; });
   el.querySelector("textarea").addEventListener("input", e => { f.note = e.target.value; remember(); });
