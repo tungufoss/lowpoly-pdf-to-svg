@@ -57,6 +57,14 @@ Coordinates in `d` are absolute, comma-separated pairs; no relative commands, ar
 
 `<project>-labels.csv` holds the same mapping: `label, pdf_number, status, pieces`.
 
+Complete glue pairs whose two edges belong to the same physical piece use a single
+letter (`A`–`A`, then `B`–`B`, etc.). These letters are unique across the export and
+come from the same pen-safe alphabet as other labels. Joins between separate pieces
+keep their existing two-character (or longer) labels and sequence positions.
+Incomplete or ambiguous edge groups keep their normal labels. An export containing
+more self-joins than the alphabet has letters fails explicitly rather than reusing
+a letter and making the pair ambiguous. Existing exported files are unchanged.
+
 ## Not provided yet
 
 Body/tab boundaries are not in the export: the converter knows which numbered edge is a tab (`data-edge="tab"`) but not the tab's polygon, so a consumer must not infer one from the cut outline.

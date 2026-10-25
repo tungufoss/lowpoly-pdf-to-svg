@@ -136,7 +136,19 @@ class GluePairs:
 
     def assign(self, alphabet: LabelAlphabet) -> None:
         everything = self.pairs + sorted(self._orphans.values(), key=lambda p: _numeric(p.number))
+        # Reserve the existing sequence positions so external joins never change when
+        # self-joins get letters. Letters are globally unique, as the export contract
+        # and downstream consumers identify pairs by label alone.
+        self_joins = [pair for pair in everything if len(pair.edges) == 2
+                      and pair.edges[0].piece == pair.edges[1].piece
+                      and all(edge.partner == edge.piece for edge in pair.edges)]
+        letters = [symbol for symbol in alphabet.symbols if symbol.isalpha()]
+        if len(self_joins) > len(letters):
+            raise ValueError(f"{len(self_joins)} self-join pairs exceed the {len(letters)} "
+                             "available single-letter labels; split the export into smaller models")
         for pair, label in zip(everything, alphabet.take(len(everything))):
+            pair.label = label
+        for pair, label in zip(self_joins, letters):
             pair.label = label
 
     def write(self, path: Path) -> None:
