@@ -518,9 +518,13 @@ class PatternView {
       const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3").lerp(new THREE.Color("#ffffff"), 0.68);
       const tint = `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
       const tinted = this.tintStrength > 0;
-      p.setAttribute("fill", tinted ? (this.model.isTab(i) ? "#ffffff" : tint) :
-        i === face ? "#1f6feb88" : mine ? "#1f6feb33" : "transparent");
-      p.setAttribute("fill-opacity", tinted ? String(this.tintStrength / 100) : "1");
+      // the picked face and its piece stay blue whatever the cardstock tint is
+      if (i === face) { p.setAttribute("fill", "#1f6feb"); p.setAttribute("fill-opacity", "0.55"); }
+      else if (mine) { p.setAttribute("fill", "#1f6feb"); p.setAttribute("fill-opacity", "0.22"); }
+      else {
+        p.setAttribute("fill", tinted ? (this.model.isTab(i) ? "#ffffff" : tint) : "transparent");
+        p.setAttribute("fill-opacity", tinted ? String(this.tintStrength / 100) : "1");
+      }
       p.setAttribute("stroke", i === face ? "#1f6feb" : "none");
       p.setAttribute("stroke-width", "0.6");
     });
