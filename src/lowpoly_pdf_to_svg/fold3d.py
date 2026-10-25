@@ -1609,6 +1609,25 @@ class Reconstruction:
     def counts(self) -> dict[str, int]:
         """Triangles of the folded surface, its corners once every closing glue joins its ends, the
         separate parts the closing glues leave, and the openings (rim loops) of their surface."""
+        corners, surface, uses = self._surface()
+        part = {}
+
+        def whole(v):
+            while part.setdefault(v, v) != v:
+                v = part[v]
+            return v
+        for ends in surface:
+            for v in ends[1:]:
+                a, b = whole(ends[0]), whole(v)
+                if a != b:
+                    part[b] = a
+        parts = len({whole(ends[0]) for ends in surface})
+        return {"triangles": sum(len(verts) - 2 for _, verts in self.asm.faces), "corners": corners,
+                "parts": parts, "openings": len(self._openings(uses))}
+
+    def _surface(self) -> tuple[int, list[list[int]], collections.Counter]:
+        """Corners once every closing glue joins its ends, the surface faces on those corners and
+        how many faces use each of their edges."""
         parent = list(range(self.solver.n))
 
         def find(v):
@@ -1622,37 +1641,31 @@ class Reconstruction:
         corners = len({find(v) for _, verts in self.asm.faces for v in verts})
         # Assembly faces are surface faces only: glue tabs end up hidden under the face they are glued to.
         surface = [[find(v) for v in verts] for _, verts in self.asm.faces]
-        part = {}
-
-        def whole(v):
-            while part.setdefault(v, v) != v:
-                v = part[v]
-            return v
         uses = collections.Counter()
         for ends in surface:
-            for v in ends[1:]:
-                a, b = whole(ends[0]), whole(v)
-                if a != b:
-                    part[b] = a
             for p, q in zip(ends, ends[1:] + ends[:1]):
                 if p != q:
                     uses[frozenset((p, q))] += 1
-        parts = len({whole(ends[0]) for ends in surface})
-        # An opening is one closed run of rim: edges that only one surface face uses.
+        return corners, surface, uses
+
+    @staticmethod
+    def _openings(uses: collections.Counter) -> list[list[tuple[int, int]]]:
+        """The rim edges of each opening: a closed run of edges that only one surface face uses."""
         rim = {}
 
         def loop(v):
             while rim.setdefault(v, v) != v:
                 v = rim[v]
             return v
-        for edge, n in uses.items():
-            if n == 1:
-                a, b = (loop(v) for v in edge)
-                if a != b:
-                    rim[b] = a
-        openings = len({loop(v) for v in rim})
-        return {"triangles": sum(len(verts) - 2 for _, verts in self.asm.faces), "corners": corners,
-                "parts": parts, "openings": openings}
+        edges = [tuple(edge) for edge, n in uses.items() if n == 1]
+        for a, b in edges:
+            a, b = loop(a), loop(b)
+            if a != b:
+                rim[b] = a
+        runs = collections.defaultdict(list)
+        for a, b in edges:
+            runs[loop(a)].append((a, b))
+        return list(runs.values())
 
     def _baseline(self, path: Path) -> None:
         """The folded trace against the finished model's counts from the project YAML."""
@@ -1673,11 +1686,33 @@ class Reconstruction:
             f"{r['measure']} {r['traced']} vs {r['reference']} ({r['difference']:+d})" for r in rows))
 
     def _posed(self) -> np.ndarray:
-        """Centred on the largest glued part, longest axis up."""
+        """Centred and turned to face the viewer (+z), the way the viewer's Overview and the front
+        preview look at it: the twins' mirror plane is x = 0, the face looks away from the largest opening (a
+        mask's neck), and up is the end of the remaining axis that reaches furthest (horns and hair
+        rather than the chin). The pose is always a rotation; a reflection would turn the model
+        inside out. Without an opening it falls back to the principal axes."""
         x = self.x - self.x.mean(0)
         _, _, vt = np.linalg.svd(x, full_matrices=False)
-        x = x @ vt.T
-        return x[:, [1, 2, 0]]
+        x = (x @ vt.T)[:, [1, 2, 0]]
+        if np.linalg.det(vt) < 0:
+            x[:, 2] *= -1
+        loops = self._openings(self._surface()[2])
+        if not loops:
+            return x
+        right = np.array([1.0, 0.0, 0.0])
+        if self.twins is not None and self.twins.pairs:
+            right = self.twins.plane(x)[0]
+        rim = max(loops, key=lambda edges: sum(np.linalg.norm(x[a] - x[b]) for a, b in edges))
+        front = -np.mean([x[a] + x[b] for a, b in rim], axis=0)
+        front -= (front @ right) * right
+        if np.linalg.norm(front) < 1e-6:
+            return x
+        front /= np.linalg.norm(front)
+        up = np.cross(front, right)
+        reach = x @ up
+        if -reach.min() > reach.max():
+            up = -up
+        return x @ np.array([np.cross(up, front), up, front]).T
 
     def _viewer_json(self, path: Path, x: np.ndarray, rows: list[dict]) -> None:
         """Everything app/fold3d-viewer.html draws, with ids that stay put between the 3D model and
@@ -1736,6 +1771,8 @@ class Reconstruction:
 
         light = np.array([0.4, -0.6, 0.7]) / np.linalg.norm([0.4, -0.6, 0.7])
         polys, colours = [], []
+        # matplotlib keeps z up and looks at the front from -y; the pose has y up and faces +z.
+        x = x[:, [0, 2, 1]] * [1.0, -1.0, 1.0]
         for pid, verts in self.asm.faces:
             p = x[verts]
             n = np.cross(p[1] - p[0], p[2] - p[0])
