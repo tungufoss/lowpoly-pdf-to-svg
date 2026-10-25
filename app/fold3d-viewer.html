@@ -582,7 +582,8 @@ class PatternView {
       const material = this.model.pieces[f.piece].material;
       const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3").lerp(new THREE.Color("#ffffff"), 0.68);
       const tint = `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
-      const tinted = this.tintStrength > 0;
+      // After a search only the pieces found keep their cardstock tint.
+      const tinted = this.tintStrength > 0 && (!this.only || this.only.has(f.piece));
       p.setAttribute("fill", tinted ? (this.model.isTab(i) ? "#ffffff" : tint) :
         i === face ? "#1f6feb88" : mine ? "#1f6feb33" : "transparent");
       p.setAttribute("fill-opacity", tinted ? String(this.tintStrength / 100) : "1");
@@ -609,7 +610,7 @@ class PatternView {
   }
   focus(piece) {
     const xs = [], ys = [];
-    for (const i of this.model.facesOf.get(piece)) for (const [x, y] of this.model.faces[i].flat) { xs.push(x); ys.push(y); }
+    for (const i of [piece].flat().flatMap(p => this.model.facesOf.get(p) || [])) for (const [x, y] of this.model.faces[i].flat) { xs.push(x); ys.push(y); }
     const w = Math.max(...xs) - Math.min(...xs), h = Math.max(...ys) - Math.min(...ys), pad = 0.4 * Math.max(w, h, 40);
     this.setView([Math.min(...xs) - pad, Math.min(...ys) - pad, w + 2 * pad, h + 2 * pad]);
   }
@@ -841,10 +842,13 @@ class Viewer {
   // Find a glue by its number (both pieces it joins) or a piece by its id (with its twin).
   setupFind() {
     const input = document.getElementById("find-text");
+    // Clearing the box (its ✕ or emptying it) tints every piece again.
+    input.addEventListener("input", () => { if (!input.value.trim() && this.pattern.only) {
+      this.pattern.only = null; this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace); } });
     document.getElementById("find").addEventListener("submit", e => {
       e.preventDefault();
       const text = input.value.trim().toLowerCase();
-      if (!text) return;
+      if (!text) { this.pattern.only = null; this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace); return; }
       const id = text.match(/^(?:piece-)?(\d\d)-(\d\d)$/), piece = id && `piece-${id[1]}-${id[2]}`;
       let pieces = [], glue = null;
       if (piece && this.model.facesOf.has(piece)) {
@@ -863,8 +867,9 @@ class Viewer {
         filter.value = ""; filter.dispatchEvent(new Event("change"));
       }
       this.folded.relatedPieces = other ? [other] : [];
+      this.pattern.only = new Set(pieces);
       this.folded.paint(first, null); this.pattern.paint(first, null);
-      this.folded.focusPiece(pieces); this.pattern.focus(first);
+      this.folded.focusPiece(pieces); this.pattern.focus(pieces);
       this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
       if (other) this.describe(this.model.faces[this.model.facesOf.get(other)[0]], true);
       document.getElementById("viewer-status").textContent = glue
