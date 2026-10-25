@@ -432,8 +432,13 @@ class FoldedView {
     if (!points.length) return;
     const box = new THREE.Box3().setFromPoints(points), centre = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3()), radius = Math.max(size.x, size.y, size.z, 1);
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
-    const distance = radius / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) * 1.25;
+    // Look at the pieces from outside the model, along the line from its middle through them,
+    // and stand back far enough that the rest of the model is not in front of the camera.
+    const whole = new THREE.Box3().setFromObject(this.mesh), middle = whole.getCenter(new THREE.Vector3());
+    const out = centre.clone().sub(middle);
+    const direction = out.lengthSq() > 1 ? out.normalize() : this.camera.position.clone().sub(this.controls.target).normalize();
+    const reach = whole.getSize(new THREE.Vector3()).length() / 2 - centre.distanceTo(middle);
+    const distance = Math.max(radius / (2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2))) * 1.25, reach + radius);
     this.controls.target.copy(centre);
     this.camera.position.copy(centre).addScaledVector(direction, distance);
     this.camera.lookAt(centre); this.controls.update();
@@ -743,14 +748,21 @@ class Viewer {
       || b.unlike - a.unlike || b.trouble - a.trouble);
     this.pairAt = 0;
     const bar = document.getElementById("pair-bar");
-    document.getElementById("pair-walk").addEventListener("click", () => { bar.hidden = false; this.showPair(0); });
+    // While stepping, only the pair's cardstock is shown, so other colours cannot hide the pair.
+    const filter = document.getElementById("material-filter");
+    const showMaterial = value => { if (filter.value !== value) { filter.value = value; filter.dispatchEvent(new Event("change")); } };
+    this.showPairMaterial = piece => showMaterial(this.model.pieces[piece]?.material || "");
+    document.getElementById("pair-walk").addEventListener("click", () => {
+      if (bar.hidden) this.filterBeforeWalk = filter.value;
+      bar.hidden = false; this.showPair(0);
+    });
     bar.querySelectorAll("[data-step]").forEach(b => b.addEventListener("click", () => this.showPair(Number(b.dataset.step))));
     document.getElementById("pair-edit").addEventListener("click", () => {
       this.menuFace = this.model.facesOf.get(this.pairs[this.pairAt].pieces[0])[0];
       this.openPieceEditor();
     });
     document.getElementById("pair-close").addEventListener("click", () => {
-      bar.hidden = true; this.folded.relatedPieces = [];
+      bar.hidden = true; this.folded.relatedPieces = []; showMaterial(this.filterBeforeWalk || "");
       this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
     });
     document.addEventListener("keydown", e => {
@@ -762,6 +774,7 @@ class Viewer {
   showPair(step) {
     this.pairAt = (this.pairAt + step + this.pairs.length) % this.pairs.length;
     const {pieces, trouble, unlike, judge} = this.pairs[this.pairAt], [piece, twin] = pieces;
+    this.showPairMaterial(piece);
     this.folded.relatedPieces = twin ? [twin] : [];
     this.folded.paint(piece, null); this.pattern.paint(piece, null);
     this.folded.focusPiece(pieces); this.pattern.focus(piece);
