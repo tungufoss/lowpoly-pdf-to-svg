@@ -228,10 +228,10 @@ class ExportWriter:
     PIECE_ID = re.compile(r"piece-(\d+)-\d+$")
 
     def __init__(self, pairs: GluePairs, materials: Materials, alphabet: LabelAlphabet = LabelAlphabet(),
-                 twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 7.0):
+                 twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 10.0):
         self.pairs, self.materials, self.alphabet, self.twins = pairs, materials, alphabet, twins or {}
-        # Edge labels try sizes from label_size down to 2 mm; the pen font's cap height is 0.75 of it.
-        self.sizes = tuple(sorted({label_size, *[s / 2 for s in range(4, int(label_size * 2))]}, reverse=True))
+        # One size for every edge label (Helga: same font size); the pen font's cap height is 0.75 of it.
+        self.sizes = (label_size,)
         self.number_size = number_size
 
     def export(self, source: Path, target: Path) -> dict[str, int]:
@@ -271,11 +271,10 @@ class ExportWriter:
                                                                                  item[0][3] - item[0][1])):
                 group.sort(key=lambda e: (float(e.get("x")) - line[0] - ox) * (line[2] - line[0])
                            + (float(e.get("y")) - line[1] - oy) * (line[3] - line[1]))
-                room = 0.9 * math.hypot(line[2] - line[0], line[3] - line[1]) / len(group)
                 for k, text in enumerate(group, 1):
                     _place(text, line, ox, oy, outline, k / (len(group) + 1), text.get("data-edge") == "tab",
-                           self.sizes, room, taken=taken)
-            numbers.add(piece, outline, self.number_size)
+                           self.sizes, taken=taken)
+            numbers.add(piece, outline, self.number_size, taken)
         self.pairs.freeze(self.materials.frozen_labels, used)
         self.pairs.assign(self.alphabet)
         for text, pair in texts:
@@ -367,15 +366,15 @@ def _depth(mx: float, my: float, nx: float, ny: float, poly: list[tuple[float, f
 
 def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
            outline: list[tuple[float, float]], at: float = 0.5, tab: bool = False,
-           sizes: tuple[float, ...] = (2.0,), room: float = math.inf, chars: int = 2,
+           sizes: tuple[float, ...] = (2.0,), chars: int = 2,
            taken: list | None = None) -> None:
     """Stand the label on the edge it marks: centred at `at` along the edge, baseline along the
     edge, its top pointing away from the edge (perpendicular to it), inside the cut outline.
     A cut edge has the piece on one side only; a tab's number marks its fold, and the label goes
-    on the tab (the shallower side), centred across it when it fits. The label takes the first
-    font size in `sizes` (largest first) whose box fits inside the outline and within `room` mm
-    along the edge; if none fits it still sits centred on the edge at the smallest size, never
-    where the PDF printed the number. `taken` holds the boxes of labels already placed on the
+    on the tab (the shallower side), centred across it when it fits, else on the piece side. All
+    labels have one size (`sizes[0]`); never where the PDF printed the number. If the centre is
+    taken it slides along the edge, and as a last resort it may stick out past the outline rather
+    than cover another label. `taken` holds the boxes of labels already placed on the
     piece; a label avoids them and adds its own."""
     taken = [] if taken is None else taken
     ax, ay, bx, by = line[0] + ox, line[1] + oy, line[2] + ox, line[3] + oy
@@ -393,32 +392,50 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
     else:  # the line is off the outline: keep the side the PDF printed it on
         px, py = float(text.get("x")), float(text.get("y"))
         flip = (px - mx) * nx + (py - my) * ny < 0
+    other = minus if plus else 0.0  # depth on the far side, kept for a fold label that has no room
     if flip:
-        nx, ny, plus = -nx, -ny, minus
-    placed = None  # sized for the short label (chars), not the PDF number the text still holds
-    for size in sizes:
+        nx, ny, plus, other = -nx, -ny, minus, plus
+    sides = [(nx, ny, plus)] + ([(-nx, -ny, other)] if plus and other else [])
+
+    def fits(size: float, at_: float, side, inside: bool = True):
+        """Centre of a label of this size at `at_` along the edge, on this side, that fits, or None."""
+        sx_, sy_, depth = side
         half_w, half_h = 0.6 * size * chars / 2, 0.4 * size
-        if 2 * half_w > room and size != sizes[-1]:
-            continue
-        start = max(half_h + 0.5, plus / 2) if tab and plus else half_h + 0.5
+        px, py = ax + (bx - ax) * at_, ay + (by - ay) * at_
+        start = max(half_h + 0.5, depth / 2) if tab and depth and side is sides[0] else half_h + 0.5
         for step in range(16):
             d = start + 0.25 * step
-            cx, cy = mx + nx * d, my + ny * d
-            corners = [(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
-                       for sx in (-1, 1) for sy in (-1, 1)]
-            if all(_inside(c, outline) for c in corners) and not any(_overlap(corners, box) for box in taken):
-                placed = (size, cx, cy)
-                break
-        if placed:
+            cx, cy = px + sx_ * d, py + sy_ * d
+            corners = [(cx + kx * ux * half_w + ky * sx_ * half_h, cy + kx * uy * half_w + ky * sy_ * half_h)
+                       for kx in (-1, 1) for ky in (-1, 1)]
+            if (not inside or all(_inside(c, outline) for c in corners)) \
+                    and not any(_overlap(corners, box) for box in taken):
+                return cx, cy
+        return None
+
+    # Sized for the short label (chars), not the PDF number the text still holds. First centred on
+    # its side; for a fold, then centred on the other side (Helga: a tab label may sit on the piece);
+    # then slid along the edge; last, allowed past the outline, but never on top of another label.
+    slid = [a for k in (1, 2, 3, 4) for a in (at - 0.1 * k, at + 0.1 * k) if 0.08 < a < 0.92]
+    size = sizes[0]
+    attempts = ([(at, side, True) for side in sides]
+                + [(a, side, True) for a in slid for side in sides]
+                + [(a, side, False) for a in [at] + slid for side in sides])
+    placed, chosen = None, sides[0]
+    for a_, side, inside in attempts:
+        spot = fits(size, a_, side, inside)
+        if spot:
+            placed, chosen, (nx, ny, _) = (size, *spot), side, side
             break
-    if not placed:  # no room at any size: smallest size, centred just off the edge
-        size = sizes[-1]
+    if not placed:  # nowhere free: centred just off the edge
         placed = (size, mx + nx * (0.4 * size + 0.5), my + ny * (0.4 * size + 0.5))
     size, cx, cy = placed
     half_w, half_h = 0.6 * size * chars / 2 + 0.3, 0.4 * size + 0.3  # with a little air round it
     taken.append([(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
                   for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
     angle = math.degrees(math.atan2(nx, -ny))  # rotate(angle) turns the text's up (0,-1) onto (nx, ny)
+    if tab and len(sides) == 2 and chosen is sides[0]:  # on the tab: reads from the tab's outer edge,
+        angle = (angle + 180) % 360                    # its top towards the fold (Helga, 5E)
     text.set("x", f"{cx:.3f}")
     text.set("y", f"{cy:.3f}")
     text.set("font-size", f"{size:.2f}")
@@ -478,22 +495,18 @@ class PieceNumbers:
                     twins.setdefault(row["twin"], row["piece"])
         return twins
 
-    def add(self, piece: ET.Element, outline: list[tuple[float, float]], biggest: float = 7.0) -> None:
+    def add(self, piece: ET.Element, outline: list[tuple[float, float]], biggest: float = 10.0,
+            labels: list | None = None) -> None:
         """Write the number (and its frame) into the piece's Draw group, at the point of the piece
-        farthest from its outline, folds and edge labels, as big as that room allows."""
+        farthest from its outline and from the edge-label boxes (`labels`), as big as that room
+        allows. Fold lines may run through it: every label has to stay readable, the folds do not."""
         pid, draw = piece.get("id"), piece.find(f".//{{{SVG}}}g[@data-operation='draw']")
         if pid not in self.numbers or draw is None or len(outline) < 3:
             return
         text, frame = str(self.numbers[pid]), self.frames.get(pid)
         segments = list(zip(outline, outline[1:] + outline[:1]))
-        for path in piece.iter(f"{{{SVG}}}path"):
-            if path.get("data-operation") == "score":
-                v = [float(n) for n in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", path.get("d", ""))]
-                if len(v) >= 4:
-                    segments.append(((v[0], v[1]), (v[-2], v[-1])))
-        for label in draw.findall(f"{{{SVG}}}text"):  # an edge label as a small cross of its box
-            x, y, r = float(label.get("x")), float(label.get("y")), 0.6 * float(label.get("font-size", "2"))
-            segments += [((x - r, y), (x + r, y)), ((x, y - r), (x, y + r))]
+        for box in labels or []:
+            segments += list(zip(box, box[1:] + box[:1]))
         best, room = _widest_spot(outline, segments)
         if not best:
             return
@@ -630,8 +643,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="model folder (default: the YAML's folder)")
     parser.add_argument("--svg", type=Path, help="review SVG to export (default: <folder>/<project>.svg)")
     parser.add_argument("--check", type=Path, metavar="EXPORT", help="only check an export SVG against the contract")
-    parser.add_argument("--label-size", type=float, default=5.0, help="largest edge-label font size, mm (default 5)")
-    parser.add_argument("--number-size", type=float, default=7.0, help="largest piece-number font size, mm (default 7)")
+    parser.add_argument("--label-size", type=float, default=5.0, help="edge-label font size, mm (default 5)")
+    parser.add_argument("--number-size", type=float, default=10.0, help="largest piece-number font size, mm (default 10)")
     args = parser.parse_args()
     if args.check:
         problems = ExportContract(args.check).errors()
