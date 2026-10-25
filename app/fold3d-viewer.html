@@ -338,8 +338,10 @@ class FoldedView {
     const printedInside = volume < 0;
     const materialFor = side => new THREE.MeshLambertMaterial({ vertexColors: true, side, flatShading: true });
     const outerSide = printedInside ? THREE.BackSide : THREE.FrontSide, innerSide = printedInside ? THREE.FrontSide : THREE.BackSide;
-    this.meshMaterials = materials.map(() => materialFor(outerSide));
-    this.innerMaterials = materials.map(() => materialFor(innerSide));
+    // Entry i is cardstock i, entry i + n the same cardstock dimmed (faces glued to the filtered cardstock).
+    const dimmed = material => Object.assign(material, { transparent: true, opacity: 0.3, depthWrite: false });
+    this.meshMaterials = [...materials.map(() => materialFor(outerSide)), ...materials.map(() => dimmed(materialFor(outerSide)))];
+    this.innerMaterials = [...materials.map(() => materialFor(innerSide)), ...materials.map(() => dimmed(materialFor(innerSide)))];
     this.mesh = new THREE.Mesh(geo, this.meshMaterials);
     const innerGeo = new THREE.BufferGeometry();
     innerGeo.setAttribute("position", geo.attributes.position);
@@ -407,7 +409,7 @@ class FoldedView {
     const V = this.model.vertices;
     for (const [object, records, enabled] of [[this.openLines, this.openLineRecords, this.showOpen],
       [this.wrongLines, this.wrongLineRecords, this.showWrong]]) {
-      const pairs = records.filter(record => !this.currentMaterialFilter || record.materials.has(this.currentMaterialFilter))
+      const pairs = records.filter(record => !this.currentMaterialFilter || this.onlyMaterial(record.materials, this.currentMaterialFilter))
         .flatMap(record => record.pairs);
       object.geometry.setAttribute("position", new THREE.Float32BufferAttribute(
         pairs.flatMap(([a, b]) => [...V[a], ...V[b]]), 3));
@@ -446,11 +448,35 @@ class FoldedView {
       return !this.currentMaterialFilter || material === this.currentMaterialFilter;
     });
   }
+  onlyMaterial(materials, material) { return materials.size > 0 && [...materials].every(m => m === material); }
+  // Faces of other cardstocks that share a glued edge with a piece of this cardstock.
+  gluedFaces(material) {
+    const key = (a, b) => a < b ? `${a}:${b}` : `${b}:${a}`, byEdge = new Map();
+    this.model.faces.forEach((face, i) => face.v.forEach((a, k) => {
+      const edge = key(a, face.v[(k + 1) % face.v.length]);
+      if (!byEdge.has(edge)) byEdge.set(edge, []);
+      byEdge.get(edge).push(i);
+    }));
+    const of = face => this.model.pieces[this.model.faces[face].piece]?.material, glued = new Set();
+    for (const g of this.model.glues) {
+      if (![g.piece, g.tab_piece].some(piece => this.model.pieces[piece]?.material === material)) continue;
+      for (const face of [...(byEdge.get(key(g.v[0], g.v[1])) || []), ...(byEdge.get(key(g.v[2], g.v[3])) || [])])
+        if (of(face) !== material) glued.add(face);
+    }
+    return glued;
+  }
   setMaterialFilter(material) {
     this.currentMaterialFilter = material;
-    this.meshMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
-    this.innerMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
-    this.numbers.children.forEach(sprite => { sprite.visible = !material || sprite.userData.materials.has(material); });
+    // Only the chosen cardstock is shown in full; faces of other cardstocks glued to it stay, dimmed.
+    const n = this.materialNames.length, dim = material ? this.gluedFaces(material) : new Set();
+    this.mesh.geometry.groups.forEach((group, t) => {
+      const face = this.triFace[t];
+      group.materialIndex = this.materialIndex.get(this.model.pieces[this.model.faces[face].piece].material) + (dim.has(face) ? n : 0);
+    });
+    for (const list of [this.meshMaterials, this.innerMaterials])
+      list.forEach((entry, i) => { entry.visible = i >= n || !material || this.materialNames[i] === material; });
+    // numbers, open glues and wrong folds only where every piece involved is the chosen cardstock
+    this.numbers.children.forEach(sprite => { sprite.visible = !material || this.onlyMaterial(sprite.userData.materials, material); });
     this.edges.visible = !material;
     this.updateDiagnosticLines();
     this.fit();
