@@ -228,11 +228,13 @@ class ExportWriter:
     PIECE_ID = re.compile(r"piece-(\d+)-\d+$")
 
     def __init__(self, pairs: GluePairs, materials: Materials, alphabet: LabelAlphabet = LabelAlphabet(),
-                 twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 10.0):
+                 twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 10.0,
+                 piece_positions: dict[str, float] | None = None):
         self.pairs, self.materials, self.alphabet, self.twins = pairs, materials, alphabet, twins or {}
         # One size for every edge label (Helga: same font size); the pen font's cap height is 0.75 of it.
         self.sizes = (label_size,)
         self.number_size = number_size
+        self.piece_positions = piece_positions or {}
 
     def export(self, source: Path, target: Path) -> dict[str, int]:
         tree = ET.parse(source)
@@ -250,7 +252,7 @@ class ExportWriter:
 
         texts, used = [], set()
         pieces = [g for g in root.iter(f"{{{SVG}}}g") if g.get("data-material") is not None]
-        numbers = PieceNumbers([g.get("id") for g in pieces], self.twins)
+        numbers = PieceNumbers([g.get("id") for g in pieces], self.twins, self.piece_positions)
         for piece in pieces:
             match = self.PIECE_ID.match(piece.get("id", ""))
             page = int(match.group(1)) if match else 0
@@ -479,12 +481,14 @@ def _clearance(p: tuple[float, float], segments: list[tuple[tuple[float, float],
 class PieceNumbers:
     """A number in the middle of every piece, for finding pieces on the cut sheet. Pieces are
     numbered 1, 2, ... in piece order (page, then piece); a mirror twin (mirror-mismatches.csv)
-    shares its twin's number. The first of the two gets a circle round its number, the second a
-    square, so 4 in a circle and 4 in a square are the left and right copy of one part.
+    shares its twin's number. The left copy gets a circle and the right a square, using the
+    folded model's x positions when available (source order is the fallback before folding).
     An unpaired piece keeps its sequence slot with an A prefix and a triangle."""
 
-    def __init__(self, pieces: list[str], twins: dict[str, str] | None = None):
+    def __init__(self, pieces: list[str], twins: dict[str, str] | None = None,
+                 positions: dict[str, float] | None = None):
         twins = twins or {}
+        positions = positions or {}
         self.numbers, self.frames, count = {}, {}, 0
         for piece in sorted(pieces):
             if piece in self.numbers:
@@ -495,8 +499,23 @@ class PieceNumbers:
             if twin and twin in pieces and twin not in self.numbers:
                 self.numbers[twin] = count
                 self.frames[piece], self.frames[twin] = "circle", "square"
+                if piece in positions and twin in positions and positions[piece] > positions[twin]:
+                    self.frames[piece], self.frames[twin] = "square", "circle"
             else:
                 self.frames[piece] = "triangle"
+
+    @staticmethod
+    def read_positions(path: Path) -> dict[str, float]:
+        """The viewer model is posed with its mirror normal along x."""
+        if not path.is_file():
+            return {}
+        model = json.loads(path.read_text(encoding='utf-8'))
+        vertices = {}
+        for face in model.get('faces', []):
+            if not face.get('tab'):
+                vertices.setdefault(face['piece'], set()).update(face['v'])
+        return {piece: sum(float(model['vertices'][i][0]) for i in ids) / len(ids)
+                for piece, ids in vertices.items() if ids}
 
     @staticmethod
     def read_twins(path: Path) -> dict[str, str]:
@@ -681,7 +700,8 @@ def main() -> int:
     target = folder / f"{project}-export.svg"
     twins = PieceNumbers.read_twins(folder / "mirror-mismatches.csv")
     counts = ExportWriter(pairs, Materials(args.config), twins=twins, label_size=args.label_size,
-                          number_size=args.number_size).export(source, target)
+                          number_size=args.number_size,
+                          piece_positions=PieceNumbers.read_positions(folder / 'fold3d.json')).export(source, target)
     pairs.write(folder / f"{project}-labels.csv")
     problems = ExportContract(target).errors()
     print(f"{target}: {counts['pieces']} pieces filled, {counts['labels']} numbers -> "

@@ -5,6 +5,13 @@ from src.lowpoly_pdf_to_svg.export import PieceNumbers, SVG
 
 
 class PieceIdentifierTests(unittest.TestCase):
+    def test_model_side_overrides_source_order_without_renumbering(self):
+        ids = ['piece-01-01', 'piece-02-01']
+        twins = {ids[0]: ids[1], ids[1]: ids[0]}
+        numbers = PieceNumbers(ids, twins, {ids[0]: 20, ids[1]: -20})
+        self.assertEqual([numbers.numbers[p] for p in ids], [1, 1])
+        self.assertEqual([numbers.frames[p] for p in ids], ['square', 'circle'])
+
     def test_pair_numbers_and_circle_square_stay_stable(self):
         ids = [f'piece-01-{i:02d}' for i in range(1, 6)]
         twins = {ids[0]: ids[1], ids[1]: ids[0], ids[3]: ids[4], ids[4]: ids[3]}
