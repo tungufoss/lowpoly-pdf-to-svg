@@ -41,7 +41,8 @@ Every drawable element inside a piece is a `<path>` or `<text>` carrying `data-o
 |---|---|---|
 | `cut` | `<path>` | Exactly one per piece: the cut boundary. One compound path, outline first then any holes, closed polygons (`M x,y x,y … Z`, straight segments only), filled with `fill-rule:evenodd`. |
 | `score` | `<path>` | One straight fold line `M x,y x,y`, with `data-fold` = `mountain` or `valley`. |
-| `draw` | `<text>` | One pen label, see below. |
+| `draw` | `<text>` | One pen label or piece number, see below. |
+| `draw` | `<path>` | The circle, square or underline of a piece number (`data-mark`), an open polyline. |
 
 Coordinates in `d` are absolute, comma-separated pairs; no relative commands, arcs or curves. No `clipPath`, `mask`, `use`, `symbol` or `image` appears anywhere in the file.
 
@@ -54,6 +55,21 @@ Coordinates in `d` are absolute, comma-separated pairs; no relative commands, ar
 | `data-pair-status` | Edge-check result for the pair: `ok`, `unpaired`, `length mismatch`, … (`ok` means two edges of matching length). |
 | `data-edge` | `tab` (glue tab fold) or `edge` (plain cut edge), from the edge table; absent if the number had no row. |
 | `x`, `y`, `transform` | Label centre in mm, and `rotate(angle x y)` only. |
+
+Each label stands centred on the edge it marks (or spread along it when the edge carries two),
+its baseline along the edge, inside the cut outline and clear of the piece's other labels. Its
+`font-size` is the largest that fits, from `--label-size` (default 5 mm) down to 2 mm; the pen
+font's cap height is 0.75 of it.
+
+## Piece numbers
+
+Every piece also gets a `<text data-operation="draw" data-piece-number="N" data-label="N">` at
+its widest inside point, clear of the outline, folds and labels, up to `--number-size` (default
+7 mm). Pieces are numbered 1, 2, … in piece order; mirror twins (from `mirror-mismatches.csv`)
+share a number, the first with a circle round it and the second with a square
+(`<path data-mark="circle|square">`). Numbers that read differently upside down (6, 9, 16, 69, …)
+are underlined (`data-mark="underline"`). Piece numbers are not glue labels and never count as
+one.
 
 `<project>-labels.csv` holds the same mapping: `label, pdf_number, status, pieces`.
 
