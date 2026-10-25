@@ -97,7 +97,9 @@ class FlatPiece:
         for a, b, _ in self.folds:
             a, b = np.asarray(a), np.asarray(b)
             u = (b - a) / max(np.hypot(*(b - a)), 1e-9)
-            lines.append(LineString([a - u * SNAP_MM, b + u * SNAP_MM]))  # reach the cut line
+            # Keep the exact endpoints as nodes: extending straight through a
+            # concave corner can miss its boundary by floating-point roundoff.
+            lines.append(LineString([a - u * SNAP_MM, a, b, b + u * SNAP_MM]))
         for corner in outline.exterior.coords[:-1]:
             self.vertex(corner)
         for a, b, _ in self.folds:
