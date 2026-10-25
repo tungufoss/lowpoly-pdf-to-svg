@@ -385,17 +385,21 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
     mx, my = ax + (bx - ax) * at, ay + (by - ay) * at
     nx, ny = -uy, ux
     plus, minus = _depth(mx, my, nx, ny, outline), _depth(mx, my, -nx, -ny, outline)
-    if plus and minus:  # both sides inside: a fold; the tab is the shallower side
-        flip = (minus < plus) if tab else (minus > plus)
+    printed = (float(text.get("x")) - mx) * nx + (float(text.get("y")) - my) * ny  # PDF number's side
+    if plus and minus and tab:  # a tab's fold: the PDF prints the number on the body, so the tab is the
+        # other side (778 of 783 Bowser tabs agree with the shallower side; 5F is one that does not)
+        flip = printed > 0 if abs(printed) > 0.3 else minus < plus
+    elif plus and minus:  # a plain fold: the deeper side
+        flip = minus > plus
     elif plus or minus:
         flip = not plus
     else:  # the line is off the outline: keep the side the PDF printed it on
-        px, py = float(text.get("x")), float(text.get("y"))
-        flip = (px - mx) * nx + (py - my) * ny < 0
+        flip = printed < 0
     other = minus if plus else 0.0  # depth on the far side, kept for a fold label that has no room
     if flip:
         nx, ny, plus, other = -nx, -ny, minus, plus
-    sides = [(nx, ny, plus)] + ([(-nx, -ny, other)] if plus and other else [])
+    # A tab label stays on its tab (Helga: 5F), so a fold with a tab gives it only that side.
+    sides = [(nx, ny, plus)] + ([(-nx, -ny, other)] if plus and other and not tab else [])
 
     def fits(size: float, at_: float, side, inside: bool = True):
         """Centre of a label of this size at `at_` along the edge, on this side, that fits, or None."""
@@ -406,8 +410,12 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
         half_w, half_h = 0.6 * size * chars / 2, (0.375 if on_tab else 0.4) * size
         px, py = ax + (bx - ax) * at_, ay + (by - ay) * at_
         start = max(half_h + 0.2, depth / 2) if on_tab else half_h + 0.5
-        for step in range(16):
-            d = start + 0.25 * step if not on_tab or step < 8 else half_h + 0.2 + 0.25 * (step - 8)
+        # off the line: outwards from the start; on a tab too narrow for the font, then creeping
+        # back over the fold line, the label still on and turned to the tab
+        offsets = [start + 0.25 * k for k in range(16)]
+        if on_tab:
+            offsets = [start + 0.25 * k for k in range(8)] + [half_h + 0.2 - 0.25 * k for k in range(int((half_h + 0.2) / 0.25) + 1)]
+        for d in offsets:
             cx, cy = px + sx_ * d, py + sy_ * d
             corners = [(cx + kx * ux * half_w + ky * sx_ * half_h, cy + kx * uy * half_w + ky * sy_ * half_h)
                        for kx in (-1, 1) for ky in (-1, 1)]
@@ -417,9 +425,9 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
         return None
 
     # Sized for the short label (chars), not the PDF number the text still holds. First on its own
-    # side (a tab label on the tab), centred, then slid along the edge; only then the other side of
-    # a fold (Helga: a tab label may sit on the piece); last, allowed past the outline, but never on
-    # top of another label.
+    # side (a tab label on its tab, over the fold line if the tab is narrow), centred, then slid
+    # along the edge; a plain fold label may then use the other side; last, allowed past the
+    # outline, but never on top of another label.
     slid = [a for k in (1, 2, 3, 4) for a in (at - 0.1 * k, at + 0.1 * k) if 0.08 < a < 0.92]
     size = sizes[0]
     attempts = ([(a, side, True) for side in sides for a in [at] + slid]
@@ -437,7 +445,7 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
     taken.append([(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
                   for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
     angle = math.degrees(math.atan2(nx, -ny))  # rotate(angle) turns the text's up (0,-1) onto (nx, ny)
-    if tab and len(sides) == 2 and chosen is sides[0]:  # on the tab: reads from the tab's outer edge,
+    if tab and chosen[2] and other:  # on the tab: reads from the tab's outer edge,
         angle = (angle + 180) % 360                    # its top towards the fold (Helga, 5E)
     text.set("x", f"{cx:.3f}")
     text.set("y", f"{cy:.3f}")
