@@ -10,6 +10,7 @@ import datetime
 import pickle
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 from .config import Project
@@ -200,11 +201,16 @@ def main() -> int:
         math.dist(b, (g["ax_mm"], g["ay_mm"])) + math.dist(a, (g["bx_mm"], g["by_mm"]))) <= 4.0
         for piece, a, b in dropped)
     gaps = [g for g in symmetry.fold_gaps() if not (g["issue"] == "missing" and undone(g))]
-    with (output / f"mirror-missing-folds.csv").open("w", newline="", encoding="utf-8") as handle:
+    # Prepare the report beside its destination, then replace it in one operation. A failed
+    # Windows open/truncate must not leave the previous review report partially overwritten.
+    with tempfile.NamedTemporaryFile("w", newline="", encoding="utf-8", dir=output,
+                                     prefix=".mirror-missing-folds-", suffix=".csv", delete=False) as handle:
+        mirror_report = Path(handle.name)
         table_out = csv.DictWriter(handle, ["piece", "twin", "issue", "kind", "ax_mm", "ay_mm", "bx_mm", "by_mm"],
                                    extrasaction="ignore")
         table_out.writeheader()
         table_out.writerows(gaps)
+    mirror_report.replace(output / "mirror-missing-folds.csv")
     missing = [g for g in gaps if g["issue"] == "missing"]
     print(f"Wrote {output / 'mirror-missing-folds.csv'}: {len(missing)} folds whose mirror twin has them "
           f"on {len({g['piece'] for g in missing})} pieces, {len(gaps) - len(missing)} mirror folds in another style")
