@@ -480,7 +480,8 @@ class PieceNumbers:
     """A number in the middle of every piece, for finding pieces on the cut sheet. Pieces are
     numbered 1, 2, ... in piece order (page, then piece); a mirror twin (mirror-mismatches.csv)
     shares its twin's number. The first of the two gets a circle round its number, the second a
-    square, so 4 in a circle and 4 in a square are the left and right copy of one part."""
+    square, so 4 in a circle and 4 in a square are the left and right copy of one part.
+    An unpaired piece keeps its sequence slot with an A prefix and a triangle."""
 
     def __init__(self, pieces: list[str], twins: dict[str, str] | None = None):
         twins = twins or {}
@@ -494,6 +495,8 @@ class PieceNumbers:
             if twin and twin in pieces and twin not in self.numbers:
                 self.numbers[twin] = count
                 self.frames[piece], self.frames[twin] = "circle", "square"
+            else:
+                self.frames[piece] = "triangle"
 
     @staticmethod
     def read_twins(path: Path) -> dict[str, str]:
@@ -514,7 +517,8 @@ class PieceNumbers:
         pid, draw = piece.get("id"), piece.find(f".//{{{SVG}}}g[@data-operation='draw']")
         if pid not in self.numbers or draw is None or len(outline) < 3:
             return
-        text, frame = str(self.numbers[pid]), self.frames.get(pid)
+        frame = self.frames.get(pid)
+        text = ('A' if frame == 'triangle' else '') + str(self.numbers[pid])
         segments = list(zip(outline, outline[1:] + outline[:1]))
         for box in labels or []:
             segments += list(zip(box, box[1:] + box[:1]))
@@ -523,6 +527,9 @@ class PieceNumbers:
             return
         # Half the number's width in font sizes (pen font: 0.69 per character, cap 0.75), plus the frame.
         half = max(0.69 * len(text) - 0.19, 0.75) / 2 * (1.45 if frame else 1.0)
+        if frame == 'triangle':
+            # The triangle's inradius must contain the whole text rectangle.
+            half = 2 * math.hypot((0.69 * len(text) - 0.19) / 2, 0.375)
         size = max(3.0, min(biggest, (room - 0.5) / half))
         x, y = best
         colour = _style_value(draw.get("style", ""), "fill") or "#000000"
@@ -541,6 +548,9 @@ class PieceNumbers:
             r = half * size * (1.15 if frame == "circle" else 1.0)
             ring = ([(x + r * math.cos(k * math.pi / 12), y + r * math.sin(k * math.pi / 12)) for k in range(25)]
                     if frame == "circle" else [(x - r, y - r), (x + r, y - r), (x + r, y + r), (x - r, y + r), (x - r, y - r)])
+            if frame == 'triangle':
+                ring = [(x + r * math.cos(angle), y + r * math.sin(angle))
+                        for angle in (-math.pi / 2, math.pi / 6, 5 * math.pi / 6, -math.pi / 2)]
             ET.SubElement(draw, f"{{{SVG}}}path", {"d": "M " + " ".join(f"{px:.3f},{py:.3f}" for px, py in ring),
                                                  "style": f"fill:none;stroke:{colour};stroke-width:0.3",
                                                  "data-operation": "draw", "data-mark": frame,
@@ -613,8 +623,8 @@ class ExportContract:
                 if operation == "score" and leaf.get("data-fold") not in ("mountain", "valley"):
                     problems.append(f"{pid}: score path without data-fold mountain/valley")
                 if operation == "draw" and leaf.tag == f"{{{SVG}}}path":
-                    if leaf.get("data-mark") not in ("circle", "square", "underline") or not leaf.get("data-piece-number"):
-                        problems.append(f"{pid}: draw path that is not a piece-number circle, square or underline")
+                    if leaf.get("data-mark") not in ("circle", "square", "triangle", "underline") or not leaf.get("data-piece-number"):
+                        problems.append(f"{pid}: draw path that is not a piece-number circle, square, triangle or underline")
                 elif operation == "draw":
                     if not leaf.get("data-label") or leaf.get("data-label") != (leaf.text or ""):
                         problems.append(f"{pid}: label text and data-label differ")

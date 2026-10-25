@@ -42,7 +42,7 @@ Every drawable element inside a piece is a `<path>` or `<text>` carrying `data-o
 | `cut` | `<path>` | Exactly one per piece: the cut boundary. One compound path, outline first then any holes, closed polygons (`M x,y x,y … Z`, straight segments only), filled with `fill-rule:evenodd`. |
 | `score` | `<path>` | One straight fold line `M x,y x,y`, with `data-fold` = `mountain` or `valley`. |
 | `draw` | `<text>` | One pen label or piece number, see below. |
-| `draw` | `<path>` | The circle, square or underline of a piece number (`data-mark`), an open polyline. |
+| `draw` | `<path>` | The circle, square, triangle or underline of a piece number (`data-mark`), an open polyline. |
 
 Coordinates in `d` are absolute, comma-separated pairs; no relative commands, arcs or curves. No `clipPath`, `mask`, `use`, `symbol` or `image` appears anywhere in the file.
 
@@ -69,7 +69,9 @@ Every piece also gets a `<text data-operation="draw" data-piece-number="N" data-
 its widest inside point, clear of the outline and every label (fold lines may cross it), up to
 `--number-size` (default 10 mm). Pieces are numbered 1, 2, … in piece order; mirror twins (from `mirror-mismatches.csv`)
 share a number, the first with a circle round it and the second with a square
-(`<path data-mark="circle|square">`). Numbers that read differently upside down (6, 9, 16, 69, …)
+(`<path data-mark="circle|square">`). Unpaired pieces have an A-prefixed number in a triangle
+(`data-mark="triangle"`), for example A3. The original sequence positions are retained so
+existing paired piece numbers do not change. Numbers that read differently upside down (6, 9, 16, 69, …)
 are underlined (`data-mark="underline"`). Piece numbers are not glue labels and never count as
 one.
 
