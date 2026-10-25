@@ -551,23 +551,14 @@ class FoldedView {
     this.controls.update();
   }
   fitMirrorCenter() {
-    const centrePieces = ["piece-14-07", "piece-15-06"];
-    const centrePoints = this.model.faces.filter(face => centrePieces.includes(face.piece))
-      .flatMap(face => face.v.map(v => new THREE.Vector3(...this.model.vertices[v])));
-    if (!centrePoints.length) { this.fit(); return; }
-    const centre = new THREE.Box3().setFromPoints(centrePoints).getCenter(new THREE.Vector3());
-    // Keep the whole model in view while centring the camera on the yellow mask pair.
-    // Measure the bounds from the requested target, since it can be offset from the
-    // model's geometric centre, and account for both the viewport height and width.
+    // Overview: the whole model centred, seen from the front. fold3d poses the model facing +z
+    // with y up, so the camera sits on +z. Left-right it stays on the mirror plane (x = 0).
     const bounds = new THREE.Box3().setFromObject(this.mesh);
-    const corners = Array.from({length: 8}, (_, i) => new THREE.Vector3(
-      i & 1 ? bounds.max.x : bounds.min.x,
-      i & 2 ? bounds.max.y : bounds.min.y,
-      i & 4 ? bounds.max.z : bounds.min.z));
-    const halfWidth = Math.max(...corners.map(point => Math.abs(point.x - centre.x)));
-    const halfHeight = Math.max(...corners.map(point => Math.abs(point.y - centre.y)));
+    if (bounds.isEmpty()) return;
+    const centre = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
     const tangent = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
-    const distance = Math.max(halfHeight / tangent, halfWidth / (tangent * this.camera.aspect)) * 1.12;
+    const distance = size.z / 2 + Math.max(size.y / 2 / tangent, size.x / 2 / (tangent * this.camera.aspect)) * 1.12;
     this.controls.target.copy(centre);
     this.camera.up.set(0, 1, 0);
     this.camera.position.copy(centre).add(new THREE.Vector3(0, 0, distance));
@@ -633,9 +624,13 @@ class PatternView {
       const tint = `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
       // After a search only the pieces found keep their cardstock tint.
       const tinted = this.tintStrength > 0 && (!this.only || this.only.has(f.piece));
-      p.setAttribute("fill", tinted ? (this.model.isTab(i) ? "#ffffff" : tint) :
-        i === face ? "#1f6feb88" : mine ? "#1f6feb33" : "transparent");
-      p.setAttribute("fill-opacity", tinted ? String(this.tintStrength / 100) : "1");
+      // the picked face and its piece stay blue whatever the cardstock tint is
+      if (i === face) { p.setAttribute("fill", "#1f6feb"); p.setAttribute("fill-opacity", "0.55"); }
+      else if (mine) { p.setAttribute("fill", "#1f6feb"); p.setAttribute("fill-opacity", "0.22"); }
+      else {
+        p.setAttribute("fill", tinted ? (this.model.isTab(i) ? "#ffffff" : tint) : "transparent");
+        p.setAttribute("fill-opacity", tinted ? String(this.tintStrength / 100) : "1");
+      }
       p.setAttribute("stroke", i === face ? "#1f6feb" : "none");
       p.setAttribute("stroke-width", "0.6");
     });

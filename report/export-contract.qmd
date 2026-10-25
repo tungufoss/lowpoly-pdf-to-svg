@@ -41,7 +41,8 @@ Every drawable element inside a piece is a `<path>` or `<text>` carrying `data-o
 |---|---|---|
 | `cut` | `<path>` | Exactly one per piece: the cut boundary. One compound path, outline first then any holes, closed polygons (`M x,y x,y … Z`, straight segments only), filled with `fill-rule:evenodd`. |
 | `score` | `<path>` | One straight fold line `M x,y x,y`, with `data-fold` = `mountain` or `valley`. |
-| `draw` | `<text>` | One pen label, see below. |
+| `draw` | `<text>` | One pen label or piece number, see below. |
+| `draw` | `<path>` | The circle, square or underline of a piece number (`data-mark`), an open polyline. |
 
 Coordinates in `d` are absolute, comma-separated pairs; no relative commands, arcs or curves. No `clipPath`, `mask`, `use`, `symbol` or `image` appears anywhere in the file.
 
@@ -55,7 +56,39 @@ Coordinates in `d` are absolute, comma-separated pairs; no relative commands, ar
 | `data-edge` | `tab` (glue tab fold) or `edge` (plain cut edge), from the edge table; absent if the number had no row. |
 | `x`, `y`, `transform` | Label centre in mm, and `rotate(angle x y)` only. |
 
+Each label stands centred on the edge it marks (or spread along it when the edge carries two),
+its baseline along the edge, inside the cut outline and clear of the piece's other labels. Its
+`font-size` is the largest that fits, from `--label-size` (default 5 mm) down to 2 mm; the pen
+font's cap height is 0.75 of it.
+
+## Piece numbers
+
+Every piece also gets a `<text data-operation="draw" data-piece-number="N" data-label="N">` at
+its widest inside point, clear of the outline, folds and labels, up to `--number-size` (default
+7 mm). Pieces are numbered 1, 2, … in piece order; mirror twins (from `mirror-mismatches.csv`)
+share a number, the first with a circle round it and the second with a square
+(`<path data-mark="circle|square">`). Numbers that read differently upside down (6, 9, 16, 69, …)
+are underlined (`data-mark="underline"`). Piece numbers are not glue labels and never count as
+one.
+
 `<project>-labels.csv` holds the same mapping: `label, pdf_number, status, pieces`.
+
+Complete glue pairs whose two edges belong to the same physical piece use a single
+letter (`A`–`A`, then `B`–`B`, etc.). These letters are unique across the export and
+come from the same pen-safe alphabet as other labels. Joins between separate pieces
+keep their existing two-character (or longer) labels and sequence positions.
+Incomplete or ambiguous edge groups keep their normal labels. An export containing
+more self-joins than the alphabet has letters fails explicitly rather than reusing
+a letter and making the pair ambiguous. Existing exported files are unchanged.
+
+For cardstock already cut, set `export.frozen_labels: frozen-green/manifest.json`
+in the project YAML (path relative to that YAML). The JSON `labels` list contains
+`piece_id`, `pdf_number`, `edge` (`tab` or `edge`), and `label` for **every** printed
+edge on the cut pieces. These labels override automatic assignment, including
+self-joins, and propagate to the matching edge on another piece. Their labels are
+reserved so new pairs cannot collide with them. Missing edges, conflicting labels,
+and ambiguous identities fail before writing an export. Freeze the original SVG
+and cut files alongside this manifest for provenance; never regenerate those files.
 
 ## Not provided yet
 
