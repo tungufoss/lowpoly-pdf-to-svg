@@ -227,8 +227,12 @@ class ExportWriter:
 
     PIECE_ID = re.compile(r"piece-(\d+)-\d+$")
 
-    def __init__(self, pairs: GluePairs, materials: Materials, alphabet: LabelAlphabet = LabelAlphabet()):
-        self.pairs, self.materials, self.alphabet = pairs, materials, alphabet
+    def __init__(self, pairs: GluePairs, materials: Materials, alphabet: LabelAlphabet = LabelAlphabet(),
+                 twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 7.0):
+        self.pairs, self.materials, self.alphabet, self.twins = pairs, materials, alphabet, twins or {}
+        # Edge labels try sizes from label_size down to 2 mm; the pen font's cap height is 0.75 of it.
+        self.sizes = tuple(sorted({label_size, *[s / 2 for s in range(4, int(label_size * 2))]}, reverse=True))
+        self.number_size = number_size
 
     def export(self, source: Path, target: Path) -> dict[str, int]:
         tree = ET.parse(source)
@@ -246,12 +250,13 @@ class ExportWriter:
 
         texts, used = [], set()
         pieces = [g for g in root.iter(f"{{{SVG}}}g") if g.get("data-material") is not None]
+        numbers = PieceNumbers([g.get("id") for g in pieces], self.twins)
         for piece in pieces:
             match = self.PIECE_ID.match(piece.get("id", ""))
             page = int(match.group(1)) if match else 0
             ox, oy = offsets.get(f"page-{page:02d}", (0.0, 0.0))
             self._describe(piece, page, ox, oy)
-            outline, on_edge = _outline(piece), {}
+            outline, on_edge, taken = _outline(piece), {}, []
             for text in piece.iter(f"{{{SVG}}}text"):
                 number = (text.text or "").strip()
                 pair, edge = self.pairs.find(piece.get("id"), number,
@@ -261,11 +266,16 @@ class ExportWriter:
                     if len(edge.line) == 4 and outline:
                         on_edge.setdefault(edge.line, []).append(text)
                 texts.append((text, pair))
-            for line, group in on_edge.items():  # two numbers on one edge: spread along it
+            # Shortest edges first, as they have the least room; two numbers on one edge spread along it.
+            for line, group in sorted(on_edge.items(), key=lambda item: math.hypot(item[0][2] - item[0][0],
+                                                                                 item[0][3] - item[0][1])):
                 group.sort(key=lambda e: (float(e.get("x")) - line[0] - ox) * (line[2] - line[0])
                            + (float(e.get("y")) - line[1] - oy) * (line[3] - line[1]))
+                room = 0.9 * math.hypot(line[2] - line[0], line[3] - line[1]) / len(group)
                 for k, text in enumerate(group, 1):
-                    _place(text, line, ox, oy, outline, k / (len(group) + 1), text.get("data-edge") == "tab")
+                    _place(text, line, ox, oy, outline, k / (len(group) + 1), text.get("data-edge") == "tab",
+                           self.sizes, room, taken=taken)
+            numbers.add(piece, outline, self.number_size)
         self.pairs.freeze(self.materials.frozen_labels, used)
         self.pairs.assign(self.alphabet)
         for text, pair in texts:
@@ -356,11 +366,18 @@ def _depth(mx: float, my: float, nx: float, ny: float, poly: list[tuple[float, f
 
 
 def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
-           outline: list[tuple[float, float]], at: float = 0.5, tab: bool = False) -> None:
+           outline: list[tuple[float, float]], at: float = 0.5, tab: bool = False,
+           sizes: tuple[float, ...] = (2.0,), room: float = math.inf, chars: int = 2,
+           taken: list | None = None) -> None:
     """Stand the label on the edge it marks: centred at `at` along the edge, baseline along the
     edge, its top pointing away from the edge (perpendicular to it), inside the cut outline.
     A cut edge has the piece on one side only; a tab's number marks its fold, and the label goes
-    on the tab (the shallower side), centred across it when it fits."""
+    on the tab (the shallower side), centred across it when it fits. The label takes the first
+    font size in `sizes` (largest first) whose box fits inside the outline and within `room` mm
+    along the edge; if none fits it still sits centred on the edge at the smallest size, never
+    where the PDF printed the number. `taken` holds the boxes of labels already placed on the
+    piece; a label avoids them and adds its own."""
+    taken = [] if taken is None else taken
     ax, ay, bx, by = line[0] + ox, line[1] + oy, line[2] + ox, line[3] + oy
     length = math.hypot(bx - ax, by - ay)
     if length < 1e-6:
@@ -378,23 +395,156 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
         flip = (px - mx) * nx + (py - my) * ny < 0
     if flip:
         nx, ny, plus = -nx, -ny, minus
-    size = float(text.get("font-size", "2"))
-    half_w, half_h = 0.6 * size * max(1, len(text.text or "")) / 2, 0.4 * size
-    start = max(half_h + 0.5, plus / 2) if tab and plus else half_h + 0.5
-    for step in range(16):
-        d = start + 0.25 * step
-        cx, cy = mx + nx * d, my + ny * d
-        corners = [(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
-                   for sx in (-1, 1) for sy in (-1, 1)]
-        if all(_inside(c, outline) for c in corners):
+    placed = None  # sized for the short label (chars), not the PDF number the text still holds
+    for size in sizes:
+        half_w, half_h = 0.6 * size * chars / 2, 0.4 * size
+        if 2 * half_w > room and size != sizes[-1]:
+            continue
+        start = max(half_h + 0.5, plus / 2) if tab and plus else half_h + 0.5
+        for step in range(16):
+            d = start + 0.25 * step
+            cx, cy = mx + nx * d, my + ny * d
+            corners = [(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
+                       for sx in (-1, 1) for sy in (-1, 1)]
+            if all(_inside(c, outline) for c in corners) and not any(_overlap(corners, box) for box in taken):
+                placed = (size, cx, cy)
+                break
+        if placed:
             break
-    else:
-        return  # no room: keep the PDF's placement
+    if not placed:  # no room at any size: smallest size, centred just off the edge
+        size = sizes[-1]
+        placed = (size, mx + nx * (0.4 * size + 0.5), my + ny * (0.4 * size + 0.5))
+    size, cx, cy = placed
+    half_w, half_h = 0.6 * size * chars / 2 + 0.3, 0.4 * size + 0.3  # with a little air round it
+    taken.append([(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
+                  for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
     angle = math.degrees(math.atan2(nx, -ny))  # rotate(angle) turns the text's up (0,-1) onto (nx, ny)
     text.set("x", f"{cx:.3f}")
     text.set("y", f"{cy:.3f}")
+    text.set("font-size", f"{size:.2f}")
     text.set("text-anchor", "middle")
     text.set("transform", f"rotate({angle:.1f} {cx:.3f} {cy:.3f})")
+
+
+def _overlap(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> bool:
+    """Do two convex quadrilaterals overlap (separating-axis test; corner order is irrelevant)."""
+    for poly in (a, b):
+        for i in range(len(poly)):
+            for j in range(i + 1, len(poly)):
+                ex, ey = poly[j][0] - poly[i][0], poly[j][1] - poly[i][1]
+                pa = [(q[0] * -ey + q[1] * ex) for q in a]
+                pb = [(q[0] * -ey + q[1] * ex) for q in b]
+                if max(pa) < min(pb) or max(pb) < min(pa):
+                    return False
+    return True
+
+
+def _clearance(p: tuple[float, float], segments: list[tuple[tuple[float, float], tuple[float, float]]]) -> float:
+    best = math.inf
+    for (x1, y1), (x2, y2) in segments:
+        dx, dy = x2 - x1, y2 - y1
+        t = max(0.0, min(1.0, ((p[0] - x1) * dx + (p[1] - y1) * dy) / (dx * dx + dy * dy or 1)))
+        best = min(best, math.hypot(p[0] - x1 - t * dx, p[1] - y1 - t * dy))
+    return best
+
+
+class PieceNumbers:
+    """A number in the middle of every piece, for finding pieces on the cut sheet. Pieces are
+    numbered 1, 2, ... in piece order (page, then piece); a mirror twin (mirror-mismatches.csv)
+    shares its twin's number. The first of the two gets a circle round its number, the second a
+    square, so 4 in a circle and 4 in a square are the left and right copy of one part."""
+
+    def __init__(self, pieces: list[str], twins: dict[str, str] | None = None):
+        twins = twins or {}
+        self.numbers, self.frames, count = {}, {}, 0
+        for piece in sorted(pieces):
+            if piece in self.numbers:
+                continue
+            count += 1
+            self.numbers[piece] = count
+            twin = twins.get(piece)
+            if twin and twin in pieces and twin not in self.numbers:
+                self.numbers[twin] = count
+                self.frames[piece], self.frames[twin] = "circle", "square"
+
+    @staticmethod
+    def read_twins(path: Path) -> dict[str, str]:
+        """piece -> twin, both ways, from mirror-mismatches.csv (absent: no twins)."""
+        twins = {}
+        if path.is_file():
+            with path.open(newline="", encoding="utf-8") as handle:
+                for row in csv.DictReader(handle):
+                    twins.setdefault(row["piece"], row["twin"])
+                    twins.setdefault(row["twin"], row["piece"])
+        return twins
+
+    def add(self, piece: ET.Element, outline: list[tuple[float, float]], biggest: float = 7.0) -> None:
+        """Write the number (and its frame) into the piece's Draw group, at the point of the piece
+        farthest from its outline, folds and edge labels, as big as that room allows."""
+        pid, draw = piece.get("id"), piece.find(f".//{{{SVG}}}g[@data-operation='draw']")
+        if pid not in self.numbers or draw is None or len(outline) < 3:
+            return
+        text, frame = str(self.numbers[pid]), self.frames.get(pid)
+        segments = list(zip(outline, outline[1:] + outline[:1]))
+        for path in piece.iter(f"{{{SVG}}}path"):
+            if path.get("data-operation") == "score":
+                v = [float(n) for n in re.findall(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?", path.get("d", ""))]
+                if len(v) >= 4:
+                    segments.append(((v[0], v[1]), (v[-2], v[-1])))
+        for label in draw.findall(f"{{{SVG}}}text"):  # an edge label as a small cross of its box
+            x, y, r = float(label.get("x")), float(label.get("y")), 0.6 * float(label.get("font-size", "2"))
+            segments += [((x - r, y), (x + r, y)), ((x, y - r), (x, y + r))]
+        best, room = _widest_spot(outline, segments)
+        if not best:
+            return
+        # Half the number's width in font sizes (pen font: 0.69 per character, cap 0.75), plus the frame.
+        half = max(0.69 * len(text) - 0.19, 0.75) / 2 * (1.45 if frame else 1.0)
+        size = max(3.0, min(biggest, (room - 0.5) / half))
+        x, y = best
+        colour = _style_value(draw.get("style", ""), "fill") or "#000000"
+        element = ET.SubElement(draw, f"{{{SVG}}}text", {"x": f"{x:.3f}", "y": f"{y:.3f}", "font-size": f"{size:.2f}",
+                                                       "dominant-baseline": "central", "text-anchor": "middle",
+                                                       "data-operation": "draw", "data-label": text,
+                                                       "data-piece-number": text})
+        element.text = text
+        if set(text) <= set("01689") and set(text) & set("69"):  # 6 vs 9, 16 vs 91: underline
+            w, uy = (0.69 * len(text) - 0.19) / 2 * size, y + 0.5 * size
+            ET.SubElement(draw, f"{{{SVG}}}path", {"d": f"M {x - w:.3f},{uy:.3f} {x + w:.3f},{uy:.3f}",
+                                                 "style": f"fill:none;stroke:{colour};stroke-width:0.3",
+                                                 "data-operation": "draw", "data-mark": "underline",
+                                                 "data-piece-number": text})
+        if frame:
+            r = half * size * (1.15 if frame == "circle" else 1.0)
+            ring = ([(x + r * math.cos(k * math.pi / 12), y + r * math.sin(k * math.pi / 12)) for k in range(25)]
+                    if frame == "circle" else [(x - r, y - r), (x + r, y - r), (x + r, y + r), (x - r, y + r), (x - r, y - r)])
+            ET.SubElement(draw, f"{{{SVG}}}path", {"d": "M " + " ".join(f"{px:.3f},{py:.3f}" for px, py in ring),
+                                                 "style": f"fill:none;stroke:{colour};stroke-width:0.3",
+                                                 "data-operation": "draw", "data-mark": frame,
+                                                 "data-piece-number": text})
+
+
+def _widest_spot(outline: list[tuple[float, float]], segments) -> tuple[tuple[float, float] | None, float]:
+    """The inside point farthest from every segment: a coarse grid, then a finer one around the best."""
+    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    best, room, step = None, 0.0, max(x1 - x0, y1 - y0) / 24
+    cells = [(x0 + (i + 0.5) * step, y0 + (j + 0.5) * step)
+             for i in range(int((x1 - x0) / step) + 1) for j in range(int((y1 - y0) / step) + 1)]
+    for _ in range(3):
+        for p in cells:
+            if _inside(p, outline):
+                c = _clearance(p, segments)
+                if c > room:
+                    best, room = p, c
+        if not best:
+            break
+        step /= 4
+        cells = [(best[0] + i * step, best[1] + j * step) for i in range(-4, 5) for j in range(-4, 5)]
+    return best, room
+
+
+def _style_value(style: str, key: str) -> str:
+    return dict(part.split(":", 1) for part in style.split(";") if ":" in part).get(key, "")
 
 
 class ExportContract:
@@ -438,10 +588,14 @@ class ExportContract:
                     problems.append(f"{pid}: {leaf.tag.split('}')[1]} without data-operation")
                 if operation == "score" and leaf.get("data-fold") not in ("mountain", "valley"):
                     problems.append(f"{pid}: score path without data-fold mountain/valley")
-                if operation == "draw":
+                if operation == "draw" and leaf.tag == f"{{{SVG}}}path":
+                    if leaf.get("data-mark") not in ("circle", "square", "underline") or not leaf.get("data-piece-number"):
+                        problems.append(f"{pid}: draw path that is not a piece-number circle, square or underline")
+                elif operation == "draw":
                     if not leaf.get("data-label") or leaf.get("data-label") != (leaf.text or ""):
                         problems.append(f"{pid}: label text and data-label differ")
-                    labels.setdefault(leaf.get("data-label"), []).append(leaf.get("data-pair-status"))
+                    if not leaf.get("data-piece-number"):
+                        labels.setdefault(leaf.get("data-label"), []).append(leaf.get("data-pair-status"))
                 if leaf.get("transform") and not (leaf.tag == f"{{{SVG}}}text"
                                                   and leaf.get("transform").startswith("rotate(")):
                     problems.append(f"{pid}: transform other than a text rotate")
@@ -476,6 +630,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="model folder (default: the YAML's folder)")
     parser.add_argument("--svg", type=Path, help="review SVG to export (default: <folder>/<project>.svg)")
     parser.add_argument("--check", type=Path, metavar="EXPORT", help="only check an export SVG against the contract")
+    parser.add_argument("--label-size", type=float, default=5.0, help="largest edge-label font size, mm (default 5)")
+    parser.add_argument("--number-size", type=float, default=7.0, help="largest piece-number font size, mm (default 7)")
     args = parser.parse_args()
     if args.check:
         problems = ExportContract(args.check).errors()
@@ -489,7 +645,9 @@ def main() -> int:
             parser.error(f"{path} not found; run make first")
     pairs = GluePairs.read(edges)
     target = folder / f"{project}-export.svg"
-    counts = ExportWriter(pairs, Materials(args.config)).export(source, target)
+    twins = PieceNumbers.read_twins(folder / "mirror-mismatches.csv")
+    counts = ExportWriter(pairs, Materials(args.config), twins=twins, label_size=args.label_size,
+                          number_size=args.number_size).export(source, target)
     pairs.write(folder / f"{project}-labels.csv")
     problems = ExportContract(target).errors()
     print(f"{target}: {counts['pieces']} pieces filled, {counts['labels']} numbers -> "
