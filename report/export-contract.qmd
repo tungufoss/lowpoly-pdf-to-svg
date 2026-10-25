@@ -65,6 +65,15 @@ Incomplete or ambiguous edge groups keep their normal labels. An export containi
 more self-joins than the alphabet has letters fails explicitly rather than reusing
 a letter and making the pair ambiguous. Existing exported files are unchanged.
 
+For cardstock already cut, set `export.frozen_labels: frozen-green/manifest.json`
+in the project YAML (path relative to that YAML). The JSON `labels` list contains
+`piece_id`, `pdf_number`, `edge` (`tab` or `edge`), and `label` for **every** printed
+edge on the cut pieces. These labels override automatic assignment, including
+self-joins, and propagate to the matching edge on another piece. Their labels are
+reserved so new pairs cannot collide with them. Missing edges, conflicting labels,
+and ambiguous identities fail before writing an export. Freeze the original SVG
+and cut files alongside this manifest for provenance; never regenerate those files.
+
 ## Not provided yet
 
 Body/tab boundaries are not in the export: the converter knows which numbered edge is a tab (`data-edge="tab"`) but not the tab's polygon, so a consumer must not infer one from the cut outline.
