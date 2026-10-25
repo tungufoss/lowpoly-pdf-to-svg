@@ -392,6 +392,13 @@ class FoldedView {
     });
     c.needsUpdate = true;
   }
+  // The nearest face the ray meets among the cardstocks shown (hidden ones cannot be clicked).
+  visibleHit(ray) {
+    return ray.intersectObject(this.mesh).find(hit => {
+      const material = this.model.pieces[this.model.faces[this.triFace[hit.faceIndex]].piece]?.material;
+      return !this.currentMaterialFilter || material === this.currentMaterialFilter;
+    });
+  }
   setMaterialFilter(material) {
     this.currentMaterialFilter = material;
     this.meshMaterials.forEach((entry, i) => { entry.visible = !material || this.materialNames[i] === material; });
@@ -414,7 +421,7 @@ class FoldedView {
       if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
       const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
       ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), this.camera);
-      const hit = ray.intersectObject(this.mesh)[0];
+      const hit = this.visibleHit(ray);
       if (hit) this.onPick(this.triFace[hit.faceIndex], "3d");
     });
     canvas.addEventListener("contextmenu", e => {
@@ -425,7 +432,7 @@ class FoldedView {
       const r = canvas.getBoundingClientRect(), ray = new THREE.Raycaster();
       ray.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1,
         -(e.clientY - r.top) / r.height * 2 + 1), this.camera);
-      const hit = ray.intersectObject(this.mesh)[0];
+      const hit = this.visibleHit(ray);
       if (hit) this.onContextMenu(this.triFace[hit.faceIndex], e.clientX, e.clientY);
     });
   }
