@@ -38,6 +38,7 @@ LENGTH_TOLERANCE_MM = 1.0  # as edges.py: a clean pair's two lines agree this we
 SNAP_MM = 0.4            # fold ends and outline corners closer than this are one vertex
 SETTLE_MM = 0.5          # a glue still this far open after the rigid join lets its pieces bend
 MIRROR_FIT_MM = 1.0      # twins whose flat surface corners mirror within this (rms) are tied in 3D
+PIN_WEIGHT = 4.0         # a glue pinned by hand pulls this hard (an unpinned glue at most 1)
 MIRROR_WEIGHT = 0.5      # pull of a twin corner onto its partner's mirror image (glue pulls are 1)
 MIRROR_SCALE_MM = 4.0    # a twin pair this far from mirrored pulls a quarter as hard (Cauchy)
 
@@ -394,6 +395,8 @@ class FoldSolver:
         self.gap_scale = gap_scale_mm
         self.robust = np.ones(len(glues))      # Cauchy weight from the last solve
         self.dropped = np.zeros(len(glues), bool)
+        # glues pinned by hand (fold3d-glue-pins.json) always pull at full weight and are never let go
+        self.pinned = np.array([g.number in FoldSolver.pinned_numbers for g in glues], dtype=bool)
         rows = [(int(a), int(b)) for a, b, _ in self.rigid]
         rows += [(int(p), int(q)) for _, p, q in self.glue for _ in range(3)]
         rows += [tuple(int(v) for v in h[:6]) for h in self.hinge] * 2
@@ -401,6 +404,8 @@ class FoldSolver:
         self.mirror = np.empty((0, 3), dtype=np.int64)    # (twin pair, vertex, its mirror vertex)
         self.mirror_weight = np.empty(0)                  # per twin pair
         self.plane = (np.array([1.0, 0.0, 0.0]), 0.0)     # mirror plane n . p = d
+
+    pinned_numbers: frozenset = frozenset()
 
     def set_mirror(self, mirror: np.ndarray, pairs: int) -> None:
         """Tie twin corners: each vertex is pulled onto the mirror image of its partner."""
@@ -416,7 +421,7 @@ class FoldSolver:
 
     @property
     def glue_weight(self) -> np.ndarray:
-        return np.where(self.dropped, 0.0, self.robust)
+        return np.where(self.pinned, PIN_WEIGHT, np.where(self.dropped, 0.0, self.robust))
 
     # residuals ------------------------------------------------------------------
     def _residual_selection(self, rows: np.ndarray) -> tuple[np.ndarray, ...]:
@@ -662,7 +667,7 @@ class Grower:
 
     def _let_go(self, pid: str, x: np.ndarray, placed: set[str]) -> None:
         gaps = self.s.gaps(x)
-        mine = [k for k, o, _ in self.links[pid] if o in placed and not self.s.dropped[k]]
+        mine = [k for k, o, _ in self.links[pid] if o in placed and not self.s.dropped[k] and not self.s.pinned[k]]
         while mine and max(gaps[k] for k in mine) > self.gape:
             worst = max(mine, key=lambda k: gaps[k])
             self.s.dropped[worst] = True
@@ -1143,6 +1148,7 @@ class Reconstruction:
             print(f"[{minutes:02d}:{seconds:02d}] {text}", flush=True)
 
     def run(self) -> None:
+        FoldSolver.pinned_numbers = self._pins()
         self.pieces = read_pieces(self.svg)
         self.asm = Assembly(self.pieces)
         glues, status = GlueFinder(self.pieces).find()
@@ -1211,6 +1217,26 @@ class Reconstruction:
                                "pieces": unit.pieces, "vertices": vertices})
         return components
 
+    def _pins(self) -> frozenset:
+        """Glue numbers pinned by hand in fold3d-glue-pins.json (a list of numbers), each with its
+        mirror glue from mirror-mismatches.csv, so a pin keeps the model symmetric."""
+        path = self.svg.with_name("fold3d-glue-pins.json")
+        try:
+            pins = {str(n) for n in json.loads(path.read_text(encoding="utf-8"))}
+        except (OSError, json.JSONDecodeError, TypeError):
+            return frozenset()
+        mirrors = self.svg.with_name("mirror-mismatches.csv")
+        if mirrors.is_file():
+            with mirrors.open(newline="", encoding="utf-8") as handle:
+                for r in csv.DictReader(handle):
+                    if r["number"] in pins:
+                        pins.add(r["twin_number"])
+                    if r["twin_number"] in pins:
+                        pins.add(r["number"])
+        if pins:
+            self.log(f"pinned glues: {', '.join(sorted(pins, key=lambda n: (len(n), n)))}")
+        return frozenset(pins)
+
     def _component_signature(self, component: dict, glues: list[Glue]) -> str:
         selected = set(component["pieces"])
         pieces = []
@@ -1229,7 +1255,9 @@ class Reconstruction:
                     if glue.piece in selected and glue.other in selected]
         payload = {"solver": "same-cardstock-component-v1", "gape": self.gape,
                    "anneal": self.anneal, "fold_weight": 5.0, "smooth_weight": 1.0,
-                   "pieces": pieces, "glues": sorted(internal)}
+                   "pieces": pieces, "glues": sorted(internal),
+                   "pins": sorted(set(FoldSolver.pinned_numbers) & {g.number for g in glues
+                                                                    if g.piece in selected and g.other in selected})}
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
@@ -1668,6 +1696,8 @@ class Reconstruction:
             proposed = k in self.proposed
             if proposed and _look_alike(g.number) != "yes":
                 status = "proposed by shape only, not glued"
+            elif self.solver.pinned[k]:
+                status = "closes" if gaps[k] <= self.gape else "does not close"
             elif self.solver.dropped[k]:
                 status = "proposed, did not close" if proposed else (
                     "let go while building" if k < len(self.grown_dropped) and self.grown_dropped[k] else "does not close")
@@ -1904,12 +1934,33 @@ class Reconstruction:
             lines += ["f " + " ".join(str(v + 1) for v in verts) for verts in faces]
         path.write_text("\n".join(lines) + "\n")
 
+    def _upright(self, x: np.ndarray) -> np.ndarray:
+        """The model turned for the preview: left-right across the mirror plane (when there is one),
+        facing the camera on the side its red (mouth) pieces sit, and the gold (horns) side up."""
+        x = x - x.mean(axis=0)
+        n = self.solver.plane[0] if getattr(self, "twins", None) else np.array([1.0, 0.0, 0.0])
+
+        def centre(material: str) -> np.ndarray | None:
+            verts = [v for pid, vs in self.asm.faces if self.asm.pieces[pid].material == material for v in vs]
+            return x[verts].mean(axis=0) if verts else None
+
+        forward = np.array([0.0, 1.0, 0.0]) - n[1] * n
+        forward /= np.linalg.norm(forward)
+        mouth, horns = centre("red"), centre("gold")
+        if mouth is not None and float(mouth @ forward) < 0:
+            forward = -forward
+        up = np.cross(n, forward)
+        if horns is not None and float(horns @ up) < 0:
+            up, n = -up, -n
+        return x @ np.c_[n, -forward, up]   # the front view looks along +y, so the face points to -y
+
     def _preview(self, path: Path, x: np.ndarray) -> None:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
+        x = self._upright(x)
         light = np.array([0.4, -0.6, 0.7]) / np.linalg.norm([0.4, -0.6, 0.7])
         polys, colours = [], []
         for pid, verts in self.asm.faces:
