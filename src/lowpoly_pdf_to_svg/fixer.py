@@ -176,7 +176,7 @@ class CheckData:
         cv2.polylines(inside, [px(trace["outline"])], True, 0, 2 * reach + 1)
         known = np.zeros(gray.shape, np.uint8)
         for f in trace["folds"]:
-            cv2.line(known, *[tuple(int(v) for v in q) for q in px([f[:2], f[2:]])], 1, 2 * reach + 1)
+            cv2.line(known, *[tuple(int(v) for v in q) for q in px([f[:2], f[2:4]])], 1, 2 * reach + 1)
         for l in labels:
             cv2.circle(known, tuple(int(v) for v in px([float(l["x"]), float(l["y"])])), round(3.5 / self.mm_per_px), 1, -1)
         loose = (gray < 215) & (inside > 0) & (known == 0)
