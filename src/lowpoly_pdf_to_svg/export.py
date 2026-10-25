@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import math
 import re
 import sys
@@ -91,6 +92,7 @@ class GluePair:
     number: str
     edges: list[Edge] = field(default_factory=list)
     label: str = ""
+    frozen_label: str = ""
 
     @property
     def status(self) -> str:
@@ -136,20 +138,56 @@ class GluePairs:
 
     def assign(self, alphabet: LabelAlphabet) -> None:
         everything = self.pairs + sorted(self._orphans.values(), key=lambda p: _numeric(p.number))
+        reserved = {pair.frozen_label for pair in everything if pair.frozen_label}
         # Reserve the existing sequence positions so external joins never change when
         # self-joins get letters. Letters are globally unique, as the export contract
         # and downstream consumers identify pairs by label alone.
-        self_joins = [pair for pair in everything if len(pair.edges) == 2
+        self_joins = [pair for pair in everything if not pair.frozen_label and len(pair.edges) == 2
                       and pair.edges[0].piece == pair.edges[1].piece
                       and all(edge.partner == edge.piece for edge in pair.edges)]
-        letters = [symbol for symbol in alphabet.symbols if symbol.isalpha()]
+        letters = [symbol for symbol in alphabet.symbols if symbol.isalpha() and symbol not in reserved]
         if len(self_joins) > len(letters):
             raise ValueError(f"{len(self_joins)} self-join pairs exceed the {len(letters)} "
                              "available single-letter labels; split the export into smaller models")
-        for pair, label in zip(everything, alphabet.take(len(everything))):
-            pair.label = label
+        normal = alphabet.take(len(everything))
+        used = set(reserved)
+        deferred = []
+        for pair, label in zip(everything, normal):
+            if pair.frozen_label:
+                pair.label = pair.frozen_label
+            elif label not in used:
+                pair.label = label
+                used.add(label)
+            else:
+                deferred.append(pair)
+        available = iter(label for label in alphabet.take(len(everything) + len(reserved)) if label not in used)
+        for pair in deferred:
+            pair.label = next(available)
         for pair, label in zip(self_joins, letters):
             pair.label = label
+
+    def freeze(self, records: list[dict], used: set[int]) -> None:
+        """Pin complete pair identities from already-cut edges; ambiguity is fatal."""
+        grouped = {}
+        for row in records:
+            key = (row["piece_id"], row["pdf_number"], row["edge"])
+            grouped.setdefault(key, []).append(row["label"])
+        owners = {}
+        for key, labels in grouped.items():
+            matches = [(pair, edge) for pair in self.pairs for edge in pair.edges
+                       if (edge.piece, edge.number, edge.side) == key and id(edge) in used]
+            if len(matches) != len(labels) or len(set(labels)) != 1:
+                raise ValueError(f"stale or ambiguous frozen labels for {key}")
+            label = labels[0]
+            if not label or any(c not in LabelAlphabet.SYMBOLS for c in label):
+                raise ValueError(f"unsupported frozen label {label!r}")
+            for pair, _ in matches:
+                if pair.frozen_label and pair.frozen_label != label:
+                    raise ValueError(f"conflicting frozen labels for {key}")
+                if label in owners and owners[label] is not pair:
+                    raise ValueError(f"frozen label {label} identifies multiple glue pairs")
+                owners[label] = pair
+                pair.frozen_label = label
 
     def write(self, path: Path) -> None:
         everything = self.pairs + list(self._orphans.values())
@@ -166,6 +204,9 @@ class Materials:
 
     def __init__(self, config: Path):
         raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+        frozen = raw.get("export", {}).get("frozen_labels")
+        self.frozen_labels = (json.loads((config.parent / frozen).read_text(encoding="utf-8"))["labels"]
+                              if frozen else [])
         self.project = str(raw["project"])
         self.pdf = str(raw["source"]["pdf"])
         self.names = {str(m["id"]): str(m["name"]) for m in raw["materials"]}
@@ -225,6 +266,7 @@ class ExportWriter:
                            + (float(e.get("y")) - line[1] - oy) * (line[3] - line[1]))
                 for k, text in enumerate(group, 1):
                     _place(text, line, ox, oy, outline, k / (len(group) + 1), text.get("data-edge") == "tab")
+        self.pairs.freeze(self.materials.frozen_labels, used)
         self.pairs.assign(self.alphabet)
         for text, pair in texts:
             text.set("data-pdf-number", text.text or "")

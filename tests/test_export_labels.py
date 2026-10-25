@@ -1,6 +1,7 @@
 import unittest
 import copy
 import tempfile
+import json
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
@@ -12,6 +13,43 @@ def edge(number, piece, partner):
 
 
 class SelfJoinLabels(unittest.TestCase):
+    def test_config_resolves_manifest_relative_to_yaml(self):
+        fixture = Path(__file__).resolve().parents[1] / "fixtures/export"
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / "frozen").mkdir()
+            rows = [dict(piece_id="a", pdf_number="1", edge="edge", label="1A")]
+            (folder / "frozen/map.json").write_text(json.dumps({"labels": rows}))
+            config = folder / "model.yaml"
+            config.write_text((fixture / "sample.yaml").read_text() + "\nexport:\n  frozen_labels: frozen/map.json\n")
+            self.assertEqual(Materials(config).frozen_labels, rows)
+
+    def test_frozen_external_join_propagates_and_reserves_its_label(self):
+        pairs = GluePairs([edge("1", "a", "b"), edge("1", "b", "a"),
+                           edge("2", "c", "d"), edge("2", "d", "c")])
+        pairs.freeze([dict(piece_id="a", pdf_number="1", edge="edge", label="1B")],
+                     {id(e) for p in pairs.pairs for e in p.edges})
+        pairs.assign(LabelAlphabet())
+        self.assertEqual([p.label for p in pairs.pairs], ["1B", "1A"])
+
+    def test_frozen_self_join_keeps_old_label(self):
+        pairs = GluePairs([edge("1", "a", "a") for _ in range(2)])
+        row = dict(piece_id="a", pdf_number="1", edge="edge", label="1A")
+        pairs.freeze([row, row], {id(e) for p in pairs.pairs for e in p.edges})
+        pairs.assign(LabelAlphabet())
+        self.assertEqual(pairs.pairs[0].label, "1A")
+
+    def test_missing_frozen_edge_fails(self):
+        pairs = GluePairs([])
+        with self.assertRaisesRegex(ValueError, "stale"):
+            pairs.freeze([dict(piece_id="a", pdf_number="1", edge="edge", label="1A")], set())
+
+    def test_frozen_label_cannot_identify_different_pairs(self):
+        pairs = GluePairs([edge("1", "a", "a"), edge("2", "b", "b")])
+        rows = [dict(piece_id=p, pdf_number=n, edge="edge", label="1A") for p, n in [("a", "1"), ("b", "2")]]
+        with self.assertRaisesRegex(ValueError, "multiple glue pairs"):
+            pairs.freeze(rows, {id(e) for p in pairs.pairs for e in p.edges})
+
     def test_svg_and_csv_both_use_matching_single_letters(self):
         fixture = Path(__file__).resolve().parents[1] / "fixtures/export"
         tree = ET.parse(fixture / "sample-review.svg")
