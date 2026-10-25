@@ -106,6 +106,7 @@
   <progress id="tab-rebuild-progress" aria-label="Re-glue progress" hidden></progress>
   <label class="tint-control">Cardstock tint <input type="range" id="cardstock-tint" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
   <span class="stats" id="viewer-status" aria-live="polite">Right-click a face to edit it or mark it as a tab.</span>
+  <label><input type="checkbox" id="show-scans" checked> page scans</label>
   <label><input type="checkbox" id="show-open" checked> <span class="open">open glues</span></label>
   <label><input type="checkbox" id="show-wrong" checked> <span class="wrong">folds bent the wrong way</span></label>
 </header>
@@ -492,13 +493,29 @@ class PatternView {
     this.el = el; this.model = model; this.onPick = onPick; this.onContextMenu = onContextMenu;
     this.tintStrength = 55; this.selectedPiece = null; this.selectedFace = null;
     const doc = new DOMParser().parseFromString(svgText, "image/svg+xml");
-    // the page scans and the review marks are not part of the pattern (drop them before they load)
-    doc.querySelectorAll("metadata, image").forEach(n => n.remove());
-    doc.querySelectorAll("g").forEach(g => {
-      const label = g.getAttribute("inkscape:label");
-      if (label === "Source" || label === "Review") g.remove();
+    // The review marks are not part of the pattern. The page scans stay, faint underneath, behind
+    // the "page scans" switch; their file names are relative to the SVG (or served by the review server).
+    doc.querySelectorAll("metadata").forEach(n => n.remove());
+    doc.querySelectorAll("g").forEach(g => { if (g.getAttribute("inkscape:label") === "Review") g.remove(); });
+    const scanUrl = href => modelName && svgUrl.startsWith("/api/")
+      ? `/api/preview?model=${encodeURIComponent(modelName)}&file=${encodeURIComponent(href.split("/").pop())}`
+      : new URL(href, new URL(svgUrl, location.href)).href;
+    doc.querySelectorAll("image").forEach(img => {
+      const href = img.getAttribute("xlink:href") || img.getAttribute("href");
+      if (!href) { img.remove(); return; }
+      img.removeAttribute("xlink:href"); img.setAttribute("href", scanUrl(href));
     });
+    this.scans = [...doc.querySelectorAll("g")].find(g => g.getAttribute("inkscape:label") === "Source");
     this.svg = document.importNode(doc.documentElement, true);
+    this.scans = this.scans && this.svg.querySelector(`#${CSS.escape(this.scans.id || "source")}`);
+    const toggle = document.getElementById("show-scans");
+    const showScans = on => { if (this.scans) this.scans.style.display = on ? "" : "none"; };
+    try { toggle.checked = localStorage.getItem("fold3d-show-scans") !== "false"; } catch (e) {}
+    showScans(toggle.checked);
+    toggle.addEventListener("change", () => {
+      showScans(toggle.checked);
+      try { localStorage.setItem("fold3d-show-scans", String(toggle.checked)); } catch (e) {}
+    });
     this.svg.removeAttribute("width"); this.svg.removeAttribute("height");
     this.svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
     el.prepend(this.svg);
