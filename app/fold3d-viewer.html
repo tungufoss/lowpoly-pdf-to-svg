@@ -762,6 +762,7 @@ class PatternView {
       const piece = this.model.faces[i].piece;
       polygon.style.display = !material || this.model.pieces[piece].material === material ? "" : "none";
     });
+    this.clipScans(material);
     if (material) {
       const faces = this.model.faces.filter(f => this.model.pieces[f.piece].material === material);
       const xs = faces.flatMap(f => f.flat.map(p => p[0])), ys = faces.flatMap(f => f.flat.map(p => p[1]));
@@ -772,6 +773,22 @@ class PatternView {
       }
     } else this.setView([...this.full]);
     this.hideCrops();
+  }
+  // With a cardstock filter the page scans show only inside that cardstock's cut outlines,
+  // so other pages and the printed numbers of other cardstocks stay hidden.
+  clipScans(material) {
+    if (!this.scans) return;
+    this.svg.querySelector("#scan-clip")?.remove();
+    this.scans.removeAttribute("clip-path");
+    if (!material) return;
+    const clip = document.createElementNS(SVGNS, "clipPath");
+    clip.id = "scan-clip";
+    for (const group of this.pieceGroups.filter(g => g.dataset.material === material))
+      for (const path of group.querySelectorAll('g[id$="-cut"] path, g[id$="-cut"] polygon')) {
+        const copy = path.cloneNode(false); copy.removeAttribute("id"); clip.append(copy);
+      }
+    this.svg.prepend(clip);
+    this.scans.setAttribute("clip-path", "url(#scan-clip)");
   }
   focus(piece) {
     if (!this.found.hidden && [piece].flat().every(p => this.cropped.has(p))) return;
