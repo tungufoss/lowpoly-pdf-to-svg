@@ -421,7 +421,7 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
             cx, cy = px + sx_ * d, py + sy_ * d
             corners = [(cx + kx * ux * half_w + ky * sx_ * half_h, cy + kx * uy * half_w + ky * sy_ * half_h)
                        for kx in (-1, 1) for ky in (-1, 1)]
-            if (not inside or all(_inside(c, outline) for c in corners)) \
+            if (not inside or (_inside((cx, cy), outline) and all(_inside(c, outline) for c in corners))) \
                     and not any(_overlap(corners, box) for box in taken):
                 return cx, cy
         return None
