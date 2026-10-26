@@ -2005,6 +2005,8 @@ class Reconstruction:
 
 def _look_alike(number: str) -> str:
     """For a proposed glue 'a/b': yes when the two reads differ in one digit or one dropped digit."""
+    if number in FoldSolver.pinned_numbers:
+        return "yes"  # A person confirmed this proposed join; OCR resemblance is irrelevant.
     a, _, b = number.partition("/")
     if "?" in (a, b):
         return ""

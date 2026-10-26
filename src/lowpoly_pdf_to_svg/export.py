@@ -166,6 +166,26 @@ class GluePairs:
         for pair, label in zip(self_joins, letters):
             pair.label = label
 
+    def confirm(self, records: list[dict]) -> None:
+        """Join explicitly identified duplicate-number edges without renumbering other labels."""
+        for record in records:
+            pieces = set(record['pieces'])
+            matches = [p for p in self.pairs if p.number == str(record['number'])
+                       and any(e.piece in pieces for e in p.edges)]
+            edges = [e for p in matches for e in p.edges]
+            if len(edges) != 2 or {e.piece for e in edges} != pieces or {e.side for e in edges} != {'edge', 'tab'}:
+                raise ValueError(f"ambiguous confirmed join: {record}")
+            label = record.get('label') or matches[0].label
+            if any(p.label == label and p not in matches for p in self.pairs):
+                raise ValueError(f"confirmed label {label} is already used by another join")
+            for pair in matches:
+                pair.label = label
+            for edge in edges:
+                edge.status = 'ok'
+                edge.partner = next(e.piece for e in edges if e is not edge)
+            matches[0].edges = edges
+            self.pairs = [p for p in self.pairs if all(p is not old for old in matches[1:])]
+
     def freeze(self, records: list[dict], used: set[int]) -> None:
         """Pin complete pair identities from already-cut edges; ambiguity is fatal."""
         grouped = {}
@@ -207,6 +227,7 @@ class Materials:
         frozen = raw.get("export", {}).get("frozen_labels")
         self.frozen_labels = (json.loads((config.parent / frozen).read_text(encoding="utf-8"))["labels"]
                               if frozen else [])
+        self.confirmed_joins = raw.get('export', {}).get('confirmed_joins', [])
         self.project = str(raw["project"])
         self.pdf = str(raw["source"]["pdf"])
         self.names = {str(m["id"]): str(m["name"]) for m in raw["materials"]}
@@ -279,6 +300,7 @@ class ExportWriter:
             numbers.add(piece, outline, self.number_size, taken)
         self.pairs.freeze(self.materials.frozen_labels, used)
         self.pairs.assign(self.alphabet)
+        self.pairs.confirm(self.materials.confirmed_joins)
         for text, pair in texts:
             text.set("data-pdf-number", text.text or "")
             text.set("data-label", pair.label)
@@ -291,7 +313,7 @@ class ExportWriter:
         target.parent.mkdir(parents=True, exist_ok=True)
         tree.write(target, encoding="UTF-8", xml_declaration=True)
         return {"pieces": len(pieces), "labels": len(texts),
-                "pairs": len({id(pair) for _, pair in texts}),
+                "pairs": len({pair.label for _, pair in texts}),
                 "longest": max((len(pair.label) for _, pair in texts), default=0)}
 
     def _describe(self, piece: ET.Element, page: int, ox: float, oy: float) -> None:
