@@ -346,7 +346,7 @@ function pieceFlatOffset(group, faces) {
   return {x: median(matches.map(match => match[0])), y: median(matches.map(match => match[1]))};
 }
 
-function readPrintLabels(svgText, cricutRows, model) {
+function readPrintLabels(svgText, cricutRows, model, exportText = "") {
   const cricut = new Map();
   for (const row of cricutRows) for (const piece of (row.pieces || "").split(/\s+/).filter(Boolean))
     cricut.set(`${piece}|${row.pdf_number}`, row.label);
@@ -361,8 +361,24 @@ function readPrintLabels(svgText, cricutRows, model) {
       if (!text || !Number.isFinite(x) || !Number.isFinite(y)) continue;
       const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
       const size = Number(node.getAttribute("font-size")) || 2;
-      labels.push({piece, text, cricut: /^\d+$/.test(text) ? (cricut.get(`${piece}|${text}`) || "") : "",
+      labels.push({piece, text, cricut: !exportText && /^\d+$/.test(text) ? (cricut.get(`${piece}|${text}`) || "") : "",
         x: x + offset.x, y: y + offset.y, angle: THREE.MathUtils.degToRad(angle), size});
+    }
+  }
+  if (exportText) {
+    const exported = new DOMParser().parseFromString(exportText, "image/svg+xml");
+    for (const group of exported.querySelectorAll('g[id^="piece-"][data-material]')) {
+      const piece = group.id, offset = pieceFlatOffset(group, model.faces.filter(face => face.piece === piece));
+      for (const node of group.querySelectorAll('text[data-label]')) {
+        const x = Number(node.getAttribute("x")), y = Number(node.getAttribute("y"));
+        const frame = node.hasAttribute("data-piece-number")
+          ? node.parentNode.querySelector('path[data-mark]')?.getAttribute("data-mark") : "";
+        const mark = {circle: "○", square: "□", triangle: "△"}[frame] || "";
+        const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
+        labels.push({piece, text: "", cricut: mark + node.textContent.trim(),
+          x: x + offset.x, y: y + offset.y, angle: THREE.MathUtils.degToRad(angle),
+          size: Number(node.getAttribute("font-size")) || 2});
+      }
     }
   }
   return labels;
@@ -544,7 +560,7 @@ class FoldedView {
         const mapped = this.mapLabel(label);
         if (!mapped) continue;
         const {point, xAxis, normal, worldAt} = mapped;
-        const pageDown = worldAt([label.x, label.y + 1]).sub(point).normalize();
+        const pageDown = worldAt([label.x - Math.sin(label.angle), label.y + Math.cos(label.angle)]).sub(point).normalize();
         const yAxis = normal.clone().cross(xAxis).normalize();
         if (yAxis.dot(pageDown) > 0) yAxis.negate();
         const height = Math.max(label.size, 1.2);
@@ -1049,9 +1065,13 @@ class PatternView {
       }
       svg.append(scans);
       const group = this.svg.querySelector(`g[id="${CSS.escape(piece)}"]`);
+      let cropLabels;
       if (group) {
         const copy = group.cloneNode(true); copy.style.display = "";
         copy.removeAttribute("id"); copy.querySelectorAll("[id]").forEach(n => n.removeAttribute("id"));
+        cropLabels = copy.querySelector('.cricut-labels:not([style*="display: none"])') ||
+          copy.querySelector('g[data-operation="draw"]');
+        cropLabels?.remove();
         // the whole outline white underneath, so tabs read white like on the cardstock
         copy.querySelectorAll('g[data-operation="cut"] path, g[data-operation="cut"] polygon').forEach(n => {
           n.classList.add("crop-outline"); n.style.fill = "#ffffff";
@@ -1061,6 +1081,7 @@ class PatternView {
       for (const i of faces) {
         const p = this.polys[i].cloneNode(); p.style.display = ""; svg.append(p); this.cropPolys.push(p);
       }
+      if (cropLabels) svg.append(cropLabels);
       if (glue) {
         const ends = glue.piece === piece ? [glue.v[0], glue.v[1]] : [glue.v[2], glue.v[3]];
         const [a, b] = ends.map(v => flatOf(piece, v));
@@ -1305,6 +1326,9 @@ class Viewer {
     const apply = mode => {
       this.pattern.setLabels(mode === "cricut" ? doc : null);
       this.folded.setLabels(mode === "cricut" ? labels : null);
+      const numberMode = document.getElementById("number-label-view");
+      numberMode.value = mode === "cricut" ? "cricut" : "ocr";
+      this.folded.setLabelMode(numberMode.value);
       try { localStorage.setItem(key, mode); } catch (e) {}
     };
     try { select.value = localStorage.getItem(key) === "cricut" ? "cricut" : "pdf"; } catch (e) {}
@@ -1542,7 +1566,7 @@ try {
     labelsUrl ? fetch(labelsUrl).then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
   ]);
   const model = new Model(data);
-  window.viewer = new Viewer(model, svgText, exportText, readPrintLabels(svgText, cricutRows, model), cricutRows);
+  window.viewer = new Viewer(model, svgText, exportText, readPrintLabels(svgText, cricutRows, model, exportText), cricutRows);
   window.addEventListener("message", event => {
     if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
         event.data?.type !== "review-select-piece") return;
