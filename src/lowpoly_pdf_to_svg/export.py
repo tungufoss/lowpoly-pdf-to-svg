@@ -451,7 +451,7 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
             cx, cy = px + sx_ * d, py + sy_ * d
             corners = [(cx + kx * ux * half_w + ky * sx_ * half_h, cy + kx * uy * half_w + ky * sy_ * half_h)
                        for kx in (-1, 1) for ky in (-1, 1)]
-            if (not inside or (_inside((cx, cy), outline) and all(_inside(c, outline) for c in corners))) \
+            if _inside((cx, cy), outline) and (not inside or all(_inside(c, outline) for c in corners)) \
                     and not any(_overlap(corners, box) for box in taken):
                 return cx, cy
         return None
@@ -472,6 +472,12 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
             break
     if not placed:  # nowhere free: centred just off the edge
         placed = (size, mx + nx * (0.4 * size + 0.5), my + ny * (0.4 * size + 0.5))
+        if not _inside(placed[1:], outline):
+            segments = list(zip(outline, outline[1:] + outline[:1]))
+            segments += [edge for box in taken for edge in zip(box, box[1:] + box[:1])]
+            spot, _ = _widest_spot(outline, segments)
+            if spot:
+                placed = (size, *spot)
     size, cx, cy = placed
     half_w, half_h = 0.6 * size * chars / 2 + 1.0, 0.4 * size + 0.3  # with air round it, more along the line so 4S 5F never read as one
     taken.append([(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)

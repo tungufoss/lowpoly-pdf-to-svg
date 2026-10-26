@@ -90,6 +90,7 @@ def main() -> int:
     if not reader.available:
         print("warning: tesseract was not found, so edge numbers are left as '?'", file=sys.stderr)
     corrections = Corrections.load(output / f"number-corrections.csv")
+    corrections.rows += Corrections.load(output / 'confirmed-number-corrections.csv').rows
     new_labels = [label for _, layout, _ in fresh for piece in layout.pieces for label in piece.labels]
     known = corrections.match([(layout, page.mm_per_px) for page, layout, _ in fresh])
     print(f"reading {len(new_labels)} edge numbers ({len(known)} corrected by hand teach the reader) ...", flush=True)
@@ -114,6 +115,8 @@ def main() -> int:
     # Folds added or dropped and corners moved on the piece review, then every piece tidied (near points
     # merged, overlapping lines split); numbers on changed pieces look for their line again.
     piece_fixes = PieceFixes.load(output / f"piece-edits.csv")
+    confirmed_edits = PieceFixes.load(output / 'confirmed-piece-edits.csv').rows
+    piece_fixes.rows += [r for r in confirmed_edits if r not in piece_fixes.rows]
     page_of = {piece.id: page for page, layout, _ in results for piece in layout.pieces}
     changed, missed = piece_fixes.apply([(layout, page.mm_per_px) for page, layout, _ in results],
                                         lambda piece, a, b: detector.fold_kind(page_of[piece], a, b))
@@ -141,6 +144,7 @@ def main() -> int:
                     detector._mark_edge(label, piece, 1 / page.mm_per_px)
     print(f"changed {len(changed)} pieces by hand or from the 3D fold (folds, corners)" + (f", {len(missed)} rows matched no fold or corner" if missed else ""))
     lines = LineFixes.load(output / f"number-lines.csv")
+    lines.rows += LineFixes.load(output / 'confirmed-number-lines.csv').rows
     if lines.rows:
         applied, missed = lines.apply([(layout, page.mm_per_px) for page, layout, _ in results])
         print(f"applied {applied} hand-drawn lines" + (f", {len(missed)} matched no number" if missed else ""))
