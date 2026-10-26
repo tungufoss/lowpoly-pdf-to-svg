@@ -346,6 +346,17 @@ function pieceFlatOffset(group, faces) {
   return {x: median(matches.map(match => match[0])), y: median(matches.map(match => match[1]))};
 }
 
+function pieceBoundaryEdges(faces) {
+  const edges = new Map();
+  for (const face of faces) face.v.forEach((a, i) => {
+    const b = face.v[(i + 1) % face.v.length];
+    const key = `${face.piece}|${Math.min(a, b)}:${Math.max(a, b)}`;
+    const entry = edges.get(key) || {face, a, b, count: 0};
+    entry.count++; edges.set(key, entry);
+  });
+  return [...edges.values()].filter(edge => edge.count === 1);
+}
+
 function readPrintLabels(svgText, cricutRows, model, exportText = "") {
   const cricut = new Map();
   for (const row of cricutRows) for (const piece of (row.pieces || "").split(/\s+/).filter(Boolean))
@@ -486,7 +497,39 @@ class FoldedView {
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
       new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
     this.edges = edges; this.scene.add(edges);
+    this.buildInsideCuts(innerSide, printedInside ? 1 : -1);
     this.paint(null, null);
+  }
+  buildInsideCuts(side, insideSign) {
+    // Mesh ribbons have reliable thickness in WebGL, unlike lineWidth. Only piece boundaries
+    // are bold; edges shared by faces of the same paper piece remain light fold lines.
+    this.insideCuts = new THREE.Group();
+    const byMaterial = new Map();
+    for (const {face, a, b} of pieceBoundaryEdges(this.model.faces)) {
+      const points = face.v.map(v => new THREE.Vector3(...this.model.vertices[v]));
+      const normal = new THREE.Vector3();
+      for (let k = 1; k + 1 < points.length; k++) {
+        normal.crossVectors(points[k].clone().sub(points[0]), points[k + 1].clone().sub(points[0]));
+        if (normal.lengthSq() > 1e-8) break;
+      }
+      if (normal.lengthSq() < 1e-8) continue;
+      normal.normalize();
+      const start = new THREE.Vector3(...this.model.vertices[a]).addScaledVector(normal, insideSign * 0.06);
+      const end = new THREE.Vector3(...this.model.vertices[b]).addScaledVector(normal, insideSign * 0.06);
+      const across = normal.clone().cross(end.clone().sub(start)).normalize().multiplyScalar(0.3);
+      const corners = [start.clone().sub(across), end.clone().sub(across), end.clone().add(across), start.clone().add(across)];
+      const material = this.model.pieces[face.piece].material;
+      if (!byMaterial.has(material)) byMaterial.set(material, []);
+      for (const i of [0, 1, 2, 0, 2, 3]) byMaterial.get(material).push(...corners[i].toArray());
+    }
+    for (const [material, positions] of byMaterial) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0x000000, side,
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1}));
+      mesh.userData.material = material; this.insideCuts.add(mesh);
+    }
+    this.scene.add(this.insideCuts);
   }
   // Glue numbers written on the inside of the pieces: seen only from inside, through gaps.
   buildNumbers(V) {
@@ -724,6 +767,7 @@ class FoldedView {
       sprite.visible = (!sprite.userData.piece || !!this.cricut) && (!material || this.onlyMaterial(sprite.userData.materials, material));
     });
     this.edges.visible = !material;
+    this.insideCuts.children.forEach(mesh => { mesh.visible = !material || mesh.userData.material === material; });
     this.updateDiagnosticLines();
     this.fit();
   }
