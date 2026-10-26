@@ -348,9 +348,13 @@ function pieceFlatOffset(group, faces) {
   return {x: median(matches.map(match => match[0])), y: median(matches.map(match => match[1]))};
 }
 
-function readPrintLabels(svgText, cricutRows, model) {
+// Labels for the 3D faces. With the Cricut export, its labels and piece numbers are placed where
+// and as big as the pen draws them (5 mm / 10 mm), not at the PDF number's 2 mm.
+function readPrintLabels(svgText, cricutRows, model, exportText) {
   const cricut = new Map();
-  for (const row of cricutRows) for (const piece of (row.pieces || "").split(/\s+/).filter(Boolean))
+  const exportDoc = exportText && new DOMParser().parseFromString(exportText, "image/svg+xml");
+  const fromExport = exportDoc && !exportDoc.querySelector("parsererror") && exportDoc.querySelector("text[data-label]");
+  if (!fromExport) for (const row of cricutRows) for (const piece of (row.pieces || "").split(/\s+/).filter(Boolean))
     cricut.set(`${piece}|${row.pdf_number}`, row.label);
   const doc = new DOMParser().parseFromString(svgText, "image/svg+xml"), labels = [];
   for (const group of doc.querySelectorAll('g[id^="piece-"][data-material]')) {
@@ -365,6 +369,14 @@ function readPrintLabels(svgText, cricutRows, model) {
       const size = Number(node.getAttribute("font-size")) || 2;
       labels.push({piece, text, cricut: /^\d+$/.test(text) ? (cricut.get(`${piece}|${text}`) || "") : "",
         x: x + offset.x, y: y + offset.y, angle: THREE.MathUtils.degToRad(angle), size});
+    }
+    if (!fromExport) continue;
+    for (const node of exportDoc.querySelectorAll(`g[data-piece="${CSS.escape(piece)}"] text[data-label]`)) {
+      const x = Number(node.getAttribute("x")), y = Number(node.getAttribute("y"));
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
+      labels.push({piece, text: "", cricut: node.textContent.trim(), x: x + offset.x, y: y + offset.y,
+        angle: THREE.MathUtils.degToRad(angle), size: Number(node.getAttribute("font-size")) || 5});
     }
   }
   return labels;
@@ -1542,7 +1554,7 @@ try {
     labelsUrl ? fetch(labelsUrl).then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
   ]);
   const model = new Model(data);
-  window.viewer = new Viewer(model, svgText, exportText, readPrintLabels(svgText, cricutRows, model), cricutRows);
+  window.viewer = new Viewer(model, svgText, exportText, readPrintLabels(svgText, cricutRows, model, exportText), cricutRows);
   window.addEventListener("message", event => {
     if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
         event.data?.type !== "review-select-piece") return;
