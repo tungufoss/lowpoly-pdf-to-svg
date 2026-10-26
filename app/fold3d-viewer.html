@@ -769,9 +769,14 @@ class FoldedView {
     if (pan) this.pan(...action);
     else this.turn(({ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down"})[e.key]);
   }
-  focus(face) {
+  focus(face, onlyIfOffCenter = false) {
     const p = this.model.faces[face].v.map(v => new THREE.Vector3(...this.model.vertices[v]));
     const centre = p.reduce((a, b) => a.add(b), new THREE.Vector3()).divideScalar(p.length);
+    if (onlyIfOffCenter) {
+      const screen = centre.clone().project(this.camera);
+      // Leave the central 40% of the pane alone; pan only for an off-centre selection.
+      if (Math.abs(screen.x) <= 0.4 && Math.abs(screen.y) <= 0.4) return;
+    }
     this.camera.position.add(centre.clone().sub(this.controls.target));
     this.controls.target.copy(centre); this.controls.update();
   }
@@ -1461,11 +1466,12 @@ class Viewer {
       + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${judge ? `${judge} for you to judge (${this.model.pieces[piece]?.material}) · ` : ""}${unlike ? "shapes differ · " : ""}`
       + (trouble ? `${trouble} open glue${trouble === 1 ? "" : "s"} or wrong-way fold${trouble === 1 ? "" : "s"}` : "nothing flagged");
   }
-  select(face, from) {
+  select(face, from, recenter = true) {
     const f = this.model.faces[face];
     this.folded.paint(f.piece, face); this.pattern.paint(f.piece, face);
     // Picked in 3D: the 2D side shows just that piece, cut from its page scan.
     if (from === "3d") {
+      if (recenter) this.folded.focus(face, true);
       this.pattern.only = new Set([f.piece]);
       this.pattern.showCrops([f.piece], null, `${f.piece} · ${this.model.pieces[f.piece]?.material || ""} cardstock`);
     } else this.folded.focus(face);
@@ -1475,7 +1481,7 @@ class Viewer {
   }
   showFaceMenu(face, x, y) {
     this.menuFace = face;
-    this.select(face, "3d");
+    this.select(face, "3d", false);
     const menu = this.faceMenu, f = this.model.faces[face], isTab = this.model.isTab(face);
     menu.querySelector('[data-tab="true"]').hidden = isTab;
     menu.querySelector('[data-tab="false"]').hidden = !isTab;
