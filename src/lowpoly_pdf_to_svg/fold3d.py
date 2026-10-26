@@ -1031,9 +1031,21 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
         tab_overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         tab_overrides = {}
+    confirmed = {}
+    config = svg.with_suffix('.yaml')
+    table = svg.with_name('edge-numbers.csv')
+    if config.is_file() and table.is_file():
+        import yaml
+        records = yaml.safe_load(config.read_text(encoding='utf-8')).get('export', {}).get('confirmed_joins', [])
+        identities = {(piece, str(r['number'])) for r in records for piece in r['pieces']}
+        with table.open(newline='', encoding='utf-8') as handle:
+            for row in csv.DictReader(handle):
+                if (row['piece'], row['number']) in identities:
+                    confirmed.setdefault(row['piece'], []).append(row)
     for piece in pieces:
         piece.split_faces()
         piece.mark_labels()
+        _apply_confirmed_edges(piece, confirmed.get(piece.id, []))
         piece.mark_tabs()
     twins = MirrorTwins.read(svg.with_name("mirror-mismatches.csv"))
     _tabs_from_twins(pieces, twins)
@@ -1054,6 +1066,24 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
                     label.tab = override
     _drop_stale_tab_overrides(pieces, marked, twins)
     return pieces
+
+
+def _apply_confirmed_edges(piece: FlatPiece, records: list[dict]) -> None:
+    """The reviewed 2D edge assignment outranks the label-position heuristic."""
+    edges = list({tuple(sorted(edge)) for face in piece.faces for edge in piece.face_edges(face)})
+    for row in records:
+        values = [float(v) for v in row['line_mm'].split()]
+        if len(values) != 4:
+            raise ValueError(f"confirmed edge has no line: {piece.id}/{row['number']}")
+        a, b = np.asarray(values[:2]) + piece.page_origin, np.asarray(values[2:]) + piece.page_origin
+        def gap(edge):
+            p, q = (piece.points[v] for v in edge)
+            return min(max(np.linalg.norm(p-a), np.linalg.norm(q-b)), max(np.linalg.norm(p-b), np.linalg.norm(q-a)))
+        edge = min(edges, key=gap) if edges else None
+        labels = [label for label in piece.labels if label.text == row['number']]
+        if edge is None or gap(edge) > 2.0 or len(labels) != 1:
+            raise ValueError(f"confirmed edge no longer matches traced geometry: {piece.id}/{row['number']}")
+        labels[0].edge, labels[0].tab = edge, row['side'] == 'tab'
 
 
 def _tabs_from_twins(pieces: list[FlatPiece], twins: list[tuple[str, str]], tol_mm: float = 0.5) -> None:

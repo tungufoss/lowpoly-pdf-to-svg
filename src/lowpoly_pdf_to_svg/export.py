@@ -299,6 +299,14 @@ class ExportWriter:
                            self.sizes, taken=taken)
             numbers.add(piece, outline, self.number_size, taken)
         self.pairs.freeze(self.materials.frozen_labels, used)
+        # Explicitly retained short labels must be reserved before ordinary allocation.
+        for record in self.materials.confirmed_joins:
+            if record.get('label'):
+                owners = [p for p in self.pairs.pairs if p.number == str(record['number'])
+                          and any(e.piece == record['pieces'][0] for e in p.edges)]
+                if len(owners) != 1:
+                    raise ValueError(f"ambiguous retained confirmed label: {record}")
+                owners[0].frozen_label = record['label']
         self.pairs.assign(self.alphabet)
         self.pairs.confirm(self.materials.confirmed_joins)
         for text, pair in texts:
