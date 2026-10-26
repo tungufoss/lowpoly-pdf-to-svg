@@ -234,7 +234,8 @@ function mirrorDifference(a, b) {
       if (error < bestError) { best = j; bestError = error; }
     }
     if (best < 0) return "face shapes or triangle counts differ";
-    if (bestError > 0.1) return `face edge lengths differ by up to ${bestError.toFixed(2)} mm`;
+    // Submillimetre scan/rounding variation needs no manual pair review.
+    if (bestError > 0.5) return `face edge lengths differ by up to ${bestError.toFixed(2)} mm`;
     used.add(best);
   }
   return "";
