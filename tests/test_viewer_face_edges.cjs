@@ -1,0 +1,14 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const html = fs.readFileSync('app/fold3d-viewer.html', 'utf8');
+const start = html.indexOf('function faceOutlineEdges(');
+assert.ok(start >= 0, 'real face edge helper exists');
+const context = vm.createContext({});
+vm.runInContext(html.slice(start, html.indexOf('function pieceBoundaryEdges(', start)), context);
+const edges = context.faceOutlineEdges([{v:[0,1,2,3]}, {v:[3,2,4]}]);
+assert.equal(edges.length, 6);
+assert.ok(!edges.some(([a,b]) => a === 0 && b === 2), 'quad triangulation diagonal is absent');
+assert.equal(edges.filter(([a,b]) => a === 2 && b === 3).length, 1, 'real shared fold remains');
+assert.ok(!html.includes('new THREE.EdgesGeometry(geo'));
+console.log('Verified polygon outlines exclude synthetic diagonals and retain real folds.');

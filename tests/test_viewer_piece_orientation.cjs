@@ -1,0 +1,11 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('app/fold3d-viewer.html','utf8'),context=vm.createContext({});
+const start=html.indexOf('function pieceUprightAngle(');
+vm.runInContext(html.slice(start,html.indexOf('function orientPieceIdentifiers(',start)),context);
+const flat=[[0,0],[10,0],[0,10]];
+assert.equal(context.pieceUprightAngle(flat,[[0,0,0],[10,0,0],[0,-10,0]]),0);
+assert.equal(context.pieceUprightAngle(flat,[[0,0,0],[0,10,0],[10,0,0]]),90);
+assert.equal(Math.abs(context.pieceUprightAngle(flat,[[0,0,0],[10,0,0],[0,10,0]])),180);
+assert.equal(context.pieceUprightAngle(flat,[[0,0,0],[10,0,0],[0,0,10]]),null);
+assert.match(html,/new Viewer\(model, svgText, orientedExport, readPrintLabels\(svgText, cricutRows, model, orientedExport\)/);
+console.log('Verified upright, quarter-turn, upside-down and horizontal faces; both viewer panes use the same oriented identifiers.');
