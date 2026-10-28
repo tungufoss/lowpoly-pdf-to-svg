@@ -5,8 +5,9 @@ pair of the edge table that has one tab and one plain edge gets a new tab, built
 finished review SVG:
 
 * wider: `tabs: depth_mm` in the project YAML (default 7 mm; the PDF's are 5.6 mm), with
-  sloped ends, and on the longest glue of each seam a square flap (`flap_mm`, default 20 mm,
-  narrower on a shorter edge) centred on the edge, like a paper doll's, to hold the seam in place;
+  sloped ends; where two big pieces meet (`flap_area_mm2`, `flap_edge_mm`) and at stress
+  points listed under `flaps:` (piece ids or PDF numbers, e.g. the nose), the longest glue of the
+  seam gets a square flap (`flap_mm`, default 20 mm) centred on the edge, like a paper doll's;
 * never over a fold: the tab is laid onto the partner's face it glues to and clipped to
   that face, `margin_mm` inside its other edges, so it folds flat onto one face;
 * mirrored: a twin's tab sits on the mirror edge of its twin's tab (mirror-mismatches.csv
@@ -43,12 +44,15 @@ ON_LINE_MM = 1.0      # a fold or corner this close to an edge-table line is tha
 @dataclass
 class TabStyle:
     depth_mm: float = 7.0      # how far a tab reaches from its fold (the PDF's are 5.6 mm)
-    flap_mm: float = 20.0      # the longest glue of each seam gets a square flap this size (0: none)
+    flap_mm: float = 20.0      # size of a square flap (0: none)
+    flap_area_mm2: float = 5000.0   # a seam between two pieces this big gets one flap on its longest glue
+    flap_edge_mm: float = 25.0      # ... when that glue is at least this long
     angle_deg: float = 45.0    # slope of the tab's ends
     margin_mm: float = 0.8     # clearance from the partner face's other edges (folds and cuts)
     gap_mm: float = 1.0        # clearance between two tabs of one piece
     min_mm2: float = 4.0       # a generated tab smaller than this keeps the traced one
     keep: list[str] = field(default_factory=list)   # materials already cut: their traced tabs stay
+    flaps: list[str] = field(default_factory=list)  # stress points: piece ids (their seams) or PDF numbers
 
     @classmethod
     def from_config(cls, raw: dict | None) -> "TabStyle | None":
@@ -56,8 +60,9 @@ class TabStyle:
         if raw is False or (isinstance(raw, dict) and raw.get("generate") is False):
             return None
         raw = raw if isinstance(raw, dict) else {}
-        style = cls(**{k: float(v) for k, v in raw.items() if k in cls.__dataclass_fields__ and k != "keep"})
-        style.keep = [str(m) for m in raw.get("keep", [])]
+        lists = ("keep", "flaps")
+        style = cls(**{k: float(v) for k, v in raw.items() if k in cls.__dataclass_fields__ and k not in lists})
+        style.keep, style.flaps = ([str(m) for m in raw.get(k) or []] for k in lists)
         return style
 
 
@@ -246,6 +251,24 @@ class Retabber:
             return None
         return _simplify(shape)
 
+    def _flaps(self, glues, seams, length, shapes) -> set[int]:
+        """Square flaps where they hold the most: on the longest glue of a seam between two big
+        pieces, and at the stress points listed under `tabs: flaps:` (a piece id flaps the
+        longest glue of each of its seams, a PDF number that glue). A twin follows its twin."""
+        listed = set(self.style.flaps)
+        listed |= {self.twin[p] for p in listed if p in self.twin}
+        numbers = {n for n in listed if not n.startswith("piece-")}
+        numbers |= {self.mirror_numbers[(p, n)][1] for g in glues for p in g.pieces
+                    for n in [g.number] if n in numbers and (p, n) in self.mirror_numbers}
+        chosen = set()
+        for pieces, seam in seams.items():
+            longest = max(seam, key=lambda g: length[id(g)])
+            big = all(shapes[p].body.area >= self.style.flap_area_mm2 for p in pieces) \
+                and length[id(longest)] >= self.style.flap_edge_mm
+            if big or pieces & listed:
+                chosen.add(id(longest))
+        return chosen | {id(g) for g in glues if g.number in numbers}
+
     # ---- the stage -------------------------------------------------------------------------
     def apply(self, root: ET.Element, pairs) -> dict[str, int]:
         shapes = self._shapes(root)
@@ -271,7 +294,7 @@ class Retabber:
         seams = defaultdict(list)
         for g in glues:
             seams[frozenset(g.pieces)].append(g)
-        flaps = {id(max(seam, key=lambda g: length[id(g)])) for seam in seams.values()} if self.style.flap_mm else set()
+        flaps = self._flaps(glues, seams, length, shapes) if self.style.flap_mm else set()
         placed = defaultdict(list)
         # Flaps first, then long edges: they need the room most.
         for g in sorted(glues, key=lambda g: (id(g) not in flaps, -length[id(g)])):
