@@ -6,7 +6,8 @@ finished review SVG:
 
 * wider: `tabs: depth_mm` in the project YAML (default 7 mm; the PDF's are 5.6 mm), with
   sloped ends; where two big pieces meet (`flap_area_mm2`, `flap_edge_mm`) and at stress
-  points listed under `flaps:` (piece ids or PDF numbers, e.g. the nose), the longest glue of the
+  points (the `stress_top` share of seams carrying the most load in fold3d.json, see stress.py,
+  plus any listed under `flaps:` as piece ids or PDF numbers), the longest glue of the
   seam gets a square flap (`flap_mm`, default 20 mm) centred on the edge, like a paper doll's;
 * never over a fold: the tab is laid onto the partner's face it glues to and clipped to
   that face, `margin_mm` inside its other edges, so it folds flat onto one face;
@@ -36,6 +37,8 @@ from shapely import affinity
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import polygonize, unary_union
 
+from .stress import SeamLoad
+
 SVG = "http://www.w3.org/2000/svg"
 NUMBER = re.compile(r"[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?")
 ON_LINE_MM = 1.0      # a fold or corner this close to an edge-table line is that line
@@ -47,6 +50,7 @@ class TabStyle:
     flap_mm: float = 20.0      # size of a square flap (0: none)
     flap_area_mm2: float = 5000.0   # a seam between two pieces this big gets one flap on its longest glue
     flap_edge_mm: float = 25.0      # ... when that glue is at least this long
+    stress_top: float = 0.1         # share of seams, by load in the 3D model (fold3d.json), that get a flap
     angle_deg: float = 45.0    # slope of the tab's ends
     margin_mm: float = 0.8     # clearance from the partner face's other edges (folds and cuts)
     gap_mm: float = 1.0        # clearance between two tabs of one piece
@@ -101,8 +105,11 @@ class Glue:
 
 
 class Retabber:
-    def __init__(self, style: TabStyle, twins_csv: Path | None = None):
+    def __init__(self, style: TabStyle, twins_csv: Path | None = None, fold3d: Path | None = None):
         self.style = style
+        self.stressed: set[frozenset] = set()
+        if fold3d and fold3d.is_file() and style.stress_top > 0:
+            self.stressed = SeamLoad(fold3d).top(style.stress_top)
         self.mirror_numbers: dict[tuple[str, str], tuple[str, str]] = {}
         self.twin: dict[str, str] = {}
         if twins_csv and twins_csv.is_file():
@@ -253,19 +260,23 @@ class Retabber:
 
     def _flaps(self, glues, seams, length, shapes) -> set[int]:
         """Square flaps where they hold the most: on the longest glue of a seam between two big
-        pieces, and at the stress points listed under `tabs: flaps:` (a piece id flaps the
-        longest glue of each of its seams, a PDF number that glue). A twin follows its twin."""
+        pieces, of a seam among the most loaded in the 3D model (stress.py), and at the stress
+        points listed under `tabs: flaps:` (a piece id flaps the longest glue of each of its
+        seams, a PDF number that glue). A twin follows its twin."""
         listed = set(self.style.flaps)
         listed |= {self.twin[p] for p in listed if p in self.twin}
         numbers = {n for n in listed if not n.startswith("piece-")}
         numbers |= {self.mirror_numbers[(p, n)][1] for g in glues for p in g.pieces
                     for n in [g.number] if n in numbers and (p, n) in self.mirror_numbers}
+        stressed = self.stressed | {frozenset(self.twin.get(p) for p in key) for key in self.stressed
+                                    if all(p in self.twin for p in key)}
         chosen = set()
         for pieces, seam in seams.items():
             longest = max(seam, key=lambda g: length[id(g)])
             big = all(shapes[p].body.area >= self.style.flap_area_mm2 for p in pieces) \
                 and length[id(longest)] >= self.style.flap_edge_mm
-            if big or pieces & listed:
+            if big or pieces & listed or pieces in stressed:
+                self.stats["stress flaps"] += pieces in stressed
                 chosen.add(id(longest))
         return chosen | {id(g) for g in glues if g.number in numbers}
 
