@@ -55,7 +55,7 @@ materials:                 # one entry per cardstock colour
 
 tabs:                      # optional: glue tabs generated at export (default on)
   depth_mm: 7              # tab depth from its fold (the PDF's are about 5.6 mm)
-  flap_mm: 20              # the longest glue of each seam gets a flap this deep; 0 for none
+  flap_mm: 20              # the longest glue of each seam gets a square flap this size; 0 for none
   angle_deg: 45            # slope of the tab ends
   margin_mm: 0.8           # clearance from the partner face's folds and cuts
   gap_mm: 1                # clearance between two tabs of one piece

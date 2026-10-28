@@ -5,8 +5,8 @@ pair of the edge table that has one tab and one plain edge gets a new tab, built
 finished review SVG:
 
 * wider: `tabs: depth_mm` in the project YAML (default 7 mm; the PDF's are 5.6 mm), with
-  sloped ends, and on the longest glue of each seam a flap (`flap_mm`, default 20 mm) that
-  fills the face it glues onto, like a paper doll's, to hold the seam in place;
+  sloped ends, and on the longest glue of each seam a square flap (`flap_mm`, default 20 mm,
+  narrower on a shorter edge) centred on the edge, like a paper doll's, to hold the seam in place;
 * never over a fold: the tab is laid onto the partner's face it glues to and clipped to
   that face, `margin_mm` inside its other edges, so it folds flat onto one face;
 * mirrored: a twin's tab sits on the mirror edge of its twin's tab (mirror-mismatches.csv
@@ -43,7 +43,7 @@ ON_LINE_MM = 1.0      # a fold or corner this close to an edge-table line is tha
 @dataclass
 class TabStyle:
     depth_mm: float = 7.0      # how far a tab reaches from its fold (the PDF's are 5.6 mm)
-    flap_mm: float = 20.0      # the longest glue of each seam gets a flap this deep (0: none)
+    flap_mm: float = 20.0      # the longest glue of each seam gets a square flap this size (0: none)
     angle_deg: float = 45.0    # slope of the tab's ends
     margin_mm: float = 0.8     # clearance from the partner face's other edges (folds and cuts)
     gap_mm: float = 1.0        # clearance between two tabs of one piece
@@ -227,7 +227,12 @@ class Retabber:
         cut = min(cut, 0.45 * seg.length)
         p0, p1 = np.array(t0), np.array(t1)
         u = (p1 - p0) / seg.length
-        shape = Polygon([tuple(p0), tuple(p1), tuple(p1 - u * cut + out * d), tuple(p0 + u * cut + out * d)])
+        if depth > self.style.depth_mm:   # a flap: a paper doll's square, centred on the edge
+            side = min(depth, seg.length)
+            a, b = p0 + u * (seg.length - side) / 2, p1 - u * (seg.length - side) / 2
+            shape = Polygon([tuple(a), tuple(b), tuple(b + out * side), tuple(a + out * side)])
+        else:
+            shape = Polygon([tuple(p0), tuple(p1), tuple(p1 - u * cut + out * d), tuple(p0 + u * cut + out * d)])
         # Clear of the partner face's other edges: its folds (the tab would have to bend)
         # and its cuts (the tab would show).
         edges = [LineString([c, n]) for c, n in zip(laid.exterior.coords, laid.exterior.coords[1:])]
@@ -296,7 +301,9 @@ class Retabber:
             gone[g.tab.piece] += old
             on = shapes[g.side]
             seg = _snap(on.line(g.tab if g.side == g.tab.piece else g.edge), on.body)
-            new[g.side].append((g.shape, seg, g.kind))
+            base = g.shape.boundary.intersection(seg.buffer(0.01))   # a square flap folds only where it is
+            base = LineString(base.coords) if isinstance(base, LineString) and base.length > 0.5 else seg
+            new[g.side].append((g.shape, base, g.kind))
             if g.side != g.tab.piece:   # the edge rows trade sides; labels follow
                 g.tab.side, g.edge.side = "edge", "tab"
         for pid, shape in shapes.items():
