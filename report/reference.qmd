@@ -58,6 +58,7 @@ tabs:                      # optional: glue tabs generated at export (default on
   flap_mm: 20              # square flap size; 0 for none
   flap_area_mm2: 5000      # seams between two pieces this big get a flap on their longest glue
   flap_edge_mm: 25         # ... when that glue is at least this long
+  stress_top: 0.1          # share of seams with the most load in fold3d.json that get a flap; 0 for none
   flaps: [piece-07-03, 412]  # stress points (piece ids or PDF numbers), twins follow
   angle_deg: 45            # slope of the tab ends
   margin_mm: 0.8           # clearance from the partner face's folds and cuts

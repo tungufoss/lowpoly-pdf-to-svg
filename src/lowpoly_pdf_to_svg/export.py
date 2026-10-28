@@ -675,7 +675,8 @@ def main() -> int:
     target = folder / f"{project}-export.svg"
     twins = PieceNumbers.read_twins(folder / "mirror-mismatches.csv")
     style = TabStyle.from_config(yaml.safe_load(args.config.read_text(encoding="utf-8")).get("tabs"))
-    retab = Retabber(style, folder / "mirror-mismatches.csv") if style and not args.traced_tabs else None
+    retab = (Retabber(style, folder / "mirror-mismatches.csv", folder / "fold3d.json")
+             if style and not args.traced_tabs else None)
     counts = ExportWriter(pairs, Materials(args.config), twins=twins, label_size=args.label_size,
                           number_size=args.number_size).export(source, target, retab)
     pairs.write(folder / f"{project}-labels.csv")
