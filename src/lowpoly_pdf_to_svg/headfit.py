@@ -12,12 +12,11 @@ Reads the folded model (data/<m>/fold3d.json, millimetres) and the YAML `fit:` b
       up: +y                  # roughly up in the model's axes
       front: eyes             # the way the eye openings face (or an axis such as -y)
 
-The head is two ellipsoids (cranium, face and jaw) and a nose, placed relative to the pupils. With
-`eyes: openings` (the default, when the model has a mirrored pair of openings in front) the mask is
-scaled so its eye openings sit centred over the pupils, and the head room is reported as a check.
-With `eyes: free` the mask is scaled until the head, with clearance, just fits inside the card. The
-parts of the head that leave through the neck opening (the largest one) are allowed either way. Then a ray from each pupil, straight ahead, finds where
-the wearer looks out: through an opening, or through a piece where a sight hole must be cut.
+The head is MakeHuman's base mesh (CC0) from the neck up, scaled to the head's circumference. With
+`eyes: openings` (the default, when the model has a mirrored pair of openings in front) the mask
+faces the way its eye openings face and gets the smallest scale at which the head fits with each
+pupil inside its opening. With `eyes: free` the mask is scaled until the head, with clearance, just
+fits anywhere. Head that leaves through the neck opening (the largest one) is allowed either way.
 
 Writes data/<m>/head-fit.json, head-fit-views.svg (front and side, scaled to an A4 page) and
 head-fit-eyes.svg (A4 at 1:1: each piece the eyes look through, at the fitted scale, with the
@@ -397,10 +396,11 @@ class FitResult:
 class HeadFitter:
     """Smallest mask scale at which the head, with clearance, fits inside the card."""
 
-    def __init__(self, mask: FoldedMask, head: HeadModel, clearance: float, field: "ClearanceField | None" = None):
+    def __init__(self, mask: FoldedMask, head: HeadModel, clearance: float, field: "ClearanceField | None" = None,
+                 spacing: float = 8.0):
         self.mask, self.head, self.clearance = mask, head, clearance
         self.field = field or ClearanceField(mask)
-        self.samples = head.samples()
+        self.samples = head.samples(spacing)
 
     def margin(self, scale: float, pupils: np.ndarray) -> float:
         """Least air between head and card in real mm, ignoring head that has left through the neck."""

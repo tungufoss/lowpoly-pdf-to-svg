@@ -42,8 +42,9 @@ class HeadFit(unittest.TestCase):
     def test_a_smaller_head_needs_a_smaller_mask(self):
         scales = {}
         for name in ("child", "male"):
-            fitter = HeadFitter(self.mask, HeadModel(HeadSize.from_fit({"head": name})), clearance=10)
-            scales[name], pupils, margin = fitter.fit(low=0.5, high=3.0)
+            fitter = HeadFitter(self.mask, HeadModel(HeadSize.from_fit({"head": name})), clearance=10,
+                                spacing=25)
+            scales[name], pupils, margin = fitter.fit(low=0.8, high=2.5, tolerance=0.05)
             self.assertGreaterEqual(margin, 10)
         self.assertLess(scales["child"], scales["male"])
 
