@@ -4,11 +4,12 @@ The template's tabs are narrow and all sit where Pepakura put them. At export ev
 pair of the edge table that has one tab and one plain edge gets a new tab, built from the
 finished review SVG:
 
-* wider: `tabs: depth_mm` in the project YAML (default 7 mm; the PDF's are 5.6 mm), with
+* wider: `tabs: depth_mm` in the project YAML (default 7.5 mm, half of 15 mm double-sided tape;
+  the PDF's are 5.6 mm), with
   sloped ends; where two big pieces meet (`flap_area_mm2`, `flap_edge_mm`) and at stress
   points (the `stress_top` share of seams carrying the most load in fold3d.json, see stress.py,
   plus any listed under `flaps:` as piece ids or PDF numbers), the longest glue of the
-  seam gets a square flap (`flap_mm`, default 20 mm) centred on the edge, like a paper doll's;
+  seam gets a square flap (`flap_mm`, default 15 mm, one full tape width) centred on the edge, like a paper doll's;
 * never over a fold: the tab is laid onto the partner's face it glues to and clipped to
   that face, `margin_mm` inside its other edges, so it folds flat onto one face;
 * mirrored: a twin's tab sits on the mirror edge of its twin's tab (mirror-mismatches.csv
@@ -46,8 +47,8 @@ ON_LINE_MM = 1.0      # a fold or corner this close to an edge-table line is tha
 
 @dataclass
 class TabStyle:
-    depth_mm: float = 7.0      # how far a tab reaches from its fold (the PDF's are 5.6 mm)
-    flap_mm: float = 20.0      # size of a square flap (0: none)
+    depth_mm: float = 7.5      # how far a tab reaches from its fold: half a 15 mm tape (the PDF's are 5.6 mm)
+    flap_mm: float = 15.0      # size of a square flap, one 15 mm tape width (0: none)
     flap_area_mm2: float = 5000.0   # a seam between two pieces this big gets one flap on its longest glue
     flap_edge_mm: float = 25.0      # ... when that glue is at least this long
     stress_top: float = 0.1         # share of seams, by load in the 3D model (fold3d.json), that get a flap
@@ -319,6 +320,10 @@ class Retabber:
                 placed[g.side].append(g.shape)
         self._rewrite(shapes, glues, tab_lines)
         self.stats["tabs generated"] = sum(g.shape is not None for g in glues)
+        # Tabs the partner face cut shallower than a tape strip (0.5 mm slack): worth a look.
+        self.stats["tabs shallower than the tape"] = sum(
+            g.shape is not None and _reach(g.shape, shapes[g.side].line(g.tab if g.side == g.tab.piece else g.edge))
+            < self.style.depth_mm - 0.5 for g in glues)
         self.stats["tabs kept as traced"] = sum(g.shape is None for g in glues)
         self.stats["tabs moved to the other piece"] = sum(g.shape is not None and g.side != g.tab.piece for g in glues)
         return dict(self.stats)
@@ -430,6 +435,11 @@ def _move(geometry, a, b, c, d):
     mid_cd = ((c[0] + d[0]) / 2, (c[1] + d[1]) / 2)
     turned = affinity.rotate(geometry, angle, origin=Point(mid_ab), use_radians=True)
     return affinity.translate(turned, mid_cd[0] - mid_ab[0], mid_cd[1] - mid_ab[1])
+
+
+def _reach(tab: Polygon, seg: LineString) -> float:
+    """How far a tab reaches from its fold line."""
+    return max(LineString(seg.coords).distance(Point(c)) for c in tab.exterior.coords)
 
 
 def _outward(seg: LineString, body: Polygon) -> np.ndarray:
