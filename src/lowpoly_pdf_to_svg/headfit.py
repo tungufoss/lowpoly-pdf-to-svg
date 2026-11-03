@@ -84,6 +84,7 @@ class HeadSize:
 HEAD_MESH = Path(__file__).resolve().parents[2] / "assets" / "head" / "makehuman-head.obj"
 CIRCUMFERENCE_ABOVE_PUPILS_MM = 35.0     # where a tape goes round the head, above the brows
 NECK_BELOW_CHIN_MM = 50.0                # how much neck is kept below the chin
+TORSO_GIVE_MM = 5.0                      # the card may press this far into clothes and skin
 
 
 class HeadModel:
@@ -104,10 +105,14 @@ class HeadModel:
         vertices, pupils = vertices - origin, pupils - origin
         k = size.circumference / self._circumference(vertices)
         self.vertices = vertices * k
-        # head and neck only: the shoulders and chest stay outside the mask (the snout rests on them)
+        # Head and neck must fit inside; the shoulders and chest below must not be cut by the card
+        # (the mask rests on them, and they stop the head going further in).
         neck = -(0.49 * size.height + NECK_BELOW_CHIN_MM)
-        self.faces = faces[(self.vertices[faces][:, :, 2] > neck).all(axis=1)]
+        upper = (self.vertices[faces][:, :, 2] > neck).all(axis=1)
+        self.faces, self.torso_faces = faces[upper], faces[~upper]
         self.triangles = self.vertices[self.faces]
+        self.torso_triangles = self.vertices[self.torso_faces]
+        self._normals()
         half = size.eye_distance / 2
         self.pupils = np.array([[-half, pupils[0, 1] * k, 0.0], [half, pupils[1, 1] * k, 0.0]])
         crown = self.vertices[:, 2].max()
@@ -133,12 +138,44 @@ class HeadModel:
         hull = _convex_hull(ring)
         return float(np.linalg.norm(hull - np.roll(hull, 1, axis=0), axis=1).sum())
 
+    def _normals(self) -> None:
+        """Outward vertex normals of the torso, for the inside test."""
+        t = self.vertices[self.torso_faces]
+        n = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
+        normals = np.zeros_like(self.vertices)
+        for k in range(3):
+            np.add.at(normals, self.torso_faces[:, k], n)
+        centre = self.vertices[self.torso_faces].reshape(-1, 3).mean(0)
+        used = np.unique(self.torso_faces)
+        outward = ((self.vertices[used] - centre) * normals[used]).sum(1).mean()
+        if outward < 0:
+            normals = -normals
+        length = np.linalg.norm(normals, axis=1)
+        self.torso_points = self.vertices[used]
+        self.torso_normals = normals[used] / length[used, None]
+
+    def torso_depth(self, points: np.ndarray) -> np.ndarray:
+        """How far each point (head frame) is inside the shoulders and chest, mm; 0 outside."""
+        from scipy.spatial import cKDTree
+        if getattr(self, "_tree", None) is None:
+            self._tree = cKDTree(self.torso_points)
+        distance, index = self._tree.query(points, distance_upper_bound=60.0)
+        inside = np.zeros(len(points))
+        ok = np.isfinite(distance)
+        side = ((points[ok] - self.torso_points[index[ok]]) * self.torso_normals[index[ok]]).sum(1)
+        inside[ok] = np.where(side < 0, distance[ok], 0.0)
+        return inside
+
     def tip(self, degrees: float) -> None:
         """Tip the head about the line between the pupils."""
         turn = _pitch(degrees)
         self.vertices = self.vertices @ turn.T
         self.triangles = self.vertices[self.faces]
         self.core_centre = turn @ self.core_centre
+        self.torso_points = self.torso_points @ turn.T
+        self.torso_normals = self.torso_normals @ turn.T
+        self._tree = None
+        self.torso_triangles = self.vertices[self.torso_faces]
 
     def samples(self, spacing: float = 8.0) -> np.ndarray:
         """Points on the skin from the shoulders up, about `spacing` mm apart."""
@@ -402,6 +439,13 @@ class HeadFitter:
         self.field = field or ClearanceField(mask)
         self.samples = head.samples(spacing)
 
+    def torso_cut(self, scale: float, pupils: np.ndarray, tip: float) -> float:
+        """Deepest the card goes into the shoulders and chest, mm."""
+        if getattr(self, "_card", None) is None:
+            self._card = self.mask.surface_points(spacing=6.0)
+        points = (self._card * scale - pupils) @ _pitch(tip)       # into the upright head's frame
+        return float(self.head.torso_depth(points).max())
+
     def margin(self, scale: float, pupils: np.ndarray) -> float:
         """Least air between head and card in real mm, ignoring head that has left through the neck."""
         points = (self.samples + pupils) / scale
@@ -445,32 +489,29 @@ class HeadFitter:
         upright = self.samples
 
         def best(scale):
+            """Best pose: most head room among poses whose card stays out of the chest."""
             top = None
-            for tip in range(-30, 31, 10):
+            for tip in range(-30, 31, 5):
                 self.samples = upright @ _pitch(tip).T
-                for relief in np.arange(8.0, 45.0, 6.0):         # pupils this far behind the card
+                for relief in (10.0, 15.0, 20.0):                # face close behind the eye openings
                     for dz in (-8.0, 0.0, 8.0):                  # a little up or down in the opening
                         p = mid * scale + np.array([0.0, relief, dz])
                         m = self.margin(scale, p)
-                        if top is None or m > top[1]:
-                            top = (p, m, tip)
+                        if top is not None and m <= top[1]:
+                            continue
+                        if self.torso_cut(scale, p, tip) > TORSO_GIVE_MM:
+                            continue
+                        top = (p, m, tip)
             self.samples = upright
-            return top
-        p, m, tip = best(highest)
-        scale = highest
-        if m >= self.clearance:
-            low, high = lowest, highest
-            q = best(low)
-            if q[1] >= self.clearance:
-                return low, q[0], q[1], (lowest, highest), q[2]
-            while high - low > tolerance:
-                middle = (low + high) / 2
-                q = best(middle)
-                if q[1] >= self.clearance:
-                    high, (p, m, tip) = middle, q
-                else:
-                    low = middle
-            scale = high
+            return top or (mid * scale, -1e3, 0)
+        # The chest stops the head: scan the scales the eyes allow and keep the one with the most
+        # head room among poses that rest on the shoulders without cutting into them.
+        top = None
+        for scale in np.arange(lowest, highest + 1e-9, 0.02):
+            p, m, tip = best(scale)
+            if top is None or m > top[2] + 0.5:
+                top = (scale, p, m, tip)
+        scale, p, m, tip = top
         return scale, p, m, (lowest, highest), tip
 
     def fit(self, low: float = 0.4, high: float = 2.5, tolerance: float = 0.01) -> tuple[float, np.ndarray, float]:
@@ -548,6 +589,13 @@ class TemplateWriter:
             for i in order:
                 x, y = xy(tri[i])
                 body.append('<path d="M' + " L".join(f"{a:.1f},{b:.1f}" for a, b in zip(x, y)) + 'Z"/>')
+            body.append("</g>")
+            chest = self.head.torso_triangles + head_offset
+            body.append('<g fill="#7a9cc6" stroke="#7a9cc6" stroke-width="0.2" opacity="0.18">')
+            for tri_ in chest:
+                x, y = xy(tri_)
+                if np.all(np.abs(x - cx) < 100) and np.all(np.abs(y - cy) < 66):
+                    body.append('<path d="M' + " L".join(f"{a:.1f},{b:.1f}" for a, b in zip(x, y)) + 'Z"/>')
             body.append("</g>")
             skin = self.head.triangles + head_offset
             order = np.argsort(skin[:, :, depth].mean(1) * (1 if name == "front" else -1))
