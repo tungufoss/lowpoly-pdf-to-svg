@@ -121,7 +121,9 @@
   <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477, 2T, or 11-02"
     aria-label="Find a glue number, Cricut label, or piece" title="A Cricut label or glue number finds its paired pieces; a piece id shows that piece and its twin"></form>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
-  <label>Needs inspection <select id="inspection-list" aria-label="Needs inspection" style="max-width:32em"><option value="">Choose an issue…</option></select></label>
+  <label>Issues <select id="inspection-list" aria-label="Needs inspection" style="max-width:38em"><option value="">Choose an issue…</option></select></label>
+  <label><input id="show-confirmed" type="checkbox">Show confirmed</label>
+  <span id="inspection-legend" style="font-size:0.85em"><span style="color:#ff8585">● Error: confirmed conflict</span> · <span style="color:#ffd166">● Needs checking: uncertain</span> · <span style="color:#8bdd9b">● Confirmed: accepted</span> · Blue marks show the affected geometry</span>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
   <label>3D numbers <select id="number-label-view" aria-label="3D number labels">
     <option value="glue">Inside markers (Labels switch)</option><option value="cricut">Cricut labels on the faces</option><option value="ocr">OCR numbers on the faces</option>
@@ -349,6 +351,121 @@ function pieceFlatOffset(group, faces) {
   return {x: median(matches.map(match => match[0])), y: median(matches.map(match => match[1]))};
 }
 
+function inspectionMatchesMaterial(issue, material, pieces) {
+  return !material || issue.pieces.some(piece => pieces[piece]?.material === material);
+}
+
+function buildInspectionIssues(model, edgeRows, labels, mode) {
+  const issues = [], short = p => p.replace(/^piece-/, "");
+  const names = (number, piece) => [...new Set(labels.filter(r => String(r.pdf_number) === String(number) && (r.pieces || "").split(/\s+/).includes(piece)).map(r => r.label))];
+  const format = (number, piece) => mode === "cricut" ? names(number, piece).join("/") || `PDF ${number}` : String(number);
+  for (const g of model.glues) {
+    const pieces = [...new Set([g.piece,g.tab_piece])], a = names(g.number,g.piece), b = names(g.number,g.tab_piece);
+    const conflict = a.length && b.length && a.join("|") !== b.join("|");
+    if (!conflict && !model.isOpen(g)) {
+      if (g.confirmed) issues.push({pieces,glue:g,severity:"confirmed",label:`${format(g.number,g.piece)} · ${pieces.map(short).join(" ↔ ")} · confirmed join closes`,reason:`Confirmed join ${format(g.number,g.piece)} closes; simulated gap ${g.gap_mm} mm`});
+      continue;
+    }
+    const severity = conflict || (g.confirmed && !g.status.startsWith("proposed")) ? "error" : "warning";
+    const detail = conflict ? `labels disagree: ${format(g.number,g.piece)} ↔ ${format(g.number,g.tab_piece)}` : `${g.status}; simulated gap ${g.gap_mm} mm`;
+    issues.push({pieces,glue:g,severity,label:`${format(g.number,g.piece)} · ${pieces.map(short).join(" ↔ ")} · ${detail}`,reason:detail});
+  }
+  const seen = new Set();
+  for (const row of edgeRows) {
+    if (row.status === "ok") continue;
+    const pieces = [...new Set([row.piece,row.partner_piece].filter(p => p && model.pieces[p]))];
+    if (!pieces.length) continue;
+    const key = `${row.number}|${[...pieces].sort().join("|")}`;
+    if (seen.has(key)) continue; seen.add(key);
+    const edgeGroup = edgeRows.filter(r => String(r.number) === String(row.number) && pieces.includes(r.piece));
+    const detail = row.status === "length mismatch" ? `source edge lengths ${row.length_mm} vs ${row.partner_length_mm} mm; tracing or label needs checking` : `${row.status}; source annotation needs checking`;
+    const accepted = edgeGroup.every(r=>r.accepted);
+    issues.push({pieces,edgeRows:edgeGroup,severity:accepted?"confirmed":"warning",label:`${format(row.number,row.piece)} · ${pieces.map(short).join(" ↔ ")} · ${accepted?"reviewed and accepted":detail}`,reason:accepted?`Accepted source check: ${detail}`:detail});
+  }
+  for (const [piece,data] of Object.entries(model.pieces)) {
+    if (data.inspect) issues.push({pieces:[piece,data.twin].filter(p=>p && model.pieces[p]),severity:"warning",label:`${short(piece)} · ${data.inspect}`,reason:`${piece}: ${data.inspect}`});
+    if (data.accepted_inspection) issues.push({pieces:[piece],severity:"confirmed",label:`${short(piece)} · reviewed and accepted`,reason:`${piece}: accepted — ${data.accepted_inspection}`});
+  }
+  return issues;
+}
+
+// Ear clipping keeps renderer triangles inside concave paper faces.
+function inspectionMarks(model, issue) {
+  if (!issue) return [];
+  if (issue.edgeRows) return issue.edgeRows.filter(r=>r.flat?.length===2).map(r=> {
+    const candidates = model.faces.filter(f=>f.piece===r.piece).flatMap(f=>f.v.map((v,i)=>({v,p:f.flat[i]})));
+    const vertices = r.flat.map(p=>candidates.reduce((best,c)=>!best || Math.hypot(c.p[0]-p[0],c.p[1]-p[1]) < Math.hypot(best.p[0]-p[0],best.p[1]-p[1]) ? c : best,null)?.v);
+    return {kind:"edge",piece:r.piece,flat:r.flat,vertices,number:r.number};
+  }).filter(mark=>mark.vertices.every(v=>v!==undefined));
+  if (!issue.glue) return issue.pieces.flatMap(piece => model.pieces[piece]?.inspection_targets || []);
+  const g = issue.glue, marks = [];
+  for (const [piece, vertices] of [[g.piece,g.v.slice(0,2)],[g.tab_piece,g.v.slice(2)]]) {
+    const flat = vertices.map(vertex => {
+      const face = model.faces.find(f => f.piece === piece && f.v.includes(vertex));
+      return face?.flat[face.v.indexOf(vertex)];
+    });
+    if (flat.every(Boolean)) marks.push({kind:"edge",piece,vertices,flat,mm:g.gap_mm,number:String(g.number)});
+  }
+  return marks;
+}
+function drawInspectionMarks(svg, marks, offset) {
+  const group = document.createElementNS(SVGNS,"g"); group.setAttribute("class","inspection-marks");
+  group.setAttribute("pointer-events","none");
+  const add = (type, attrs, text) => {
+    const node = document.createElementNS(SVGNS,type);
+    for (const [key,value] of Object.entries(attrs)) node.setAttribute(key,String(value));
+    if (text) node.textContent = text;
+    group.append(node); return node;
+  };
+  for (const mark of marks) {
+    if (mark.kind === "corner") {
+      const x=mark.flat[0]+offset.x, y=mark.flat[1]+offset.y;
+      add("circle",{cx:x,cy:y,r:2,fill:"#2196ff","fill-opacity":0.15,stroke:"#087df5","stroke-width":0.8});
+      add("text",{x:x,y:y-3,"text-anchor":"middle","font-size":3.5,"font-family":"Arial, sans-serif","font-weight":"bold",fill:"#087df5",stroke:"white","stroke-width":0.7,"paint-order":"stroke"},mark.mm.toFixed(1)+" mm");
+    } else {
+      const [a,b]=mark.flat;
+      add("line",{x1:a[0]+offset.x,y1:a[1]+offset.y,x2:b[0]+offset.x,y2:b[1]+offset.y,stroke:"#087df5","stroke-width":1.2,"stroke-linecap":"round"});
+    }
+  }
+  svg.append(group);
+}
+
+function styleViewerLabels(group) {
+  for (const text of group.querySelectorAll("text")) {
+    if (!text.hasAttribute("data-piece-number")) {
+      text.setAttribute("font-size", "5");
+      text.style.fontSize = "5px";
+    }
+    text.setAttribute("font-family", "Arial, sans-serif");
+    text.setAttribute("font-weight", "bold");
+  }
+}
+
+function faceTriangles(face) {
+  const p = face.flat, remaining = p.map((_, i) => i), result = [];
+  const cross = (a, b, c) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+  const area = p.reduce((sum, a, i) => { const b = p[(i+1)%p.length]; return sum+a[0]*b[1]-a[1]*b[0]; }, 0);
+  const sign = area >= 0 ? 1 : -1, eps = 1e-8;
+  while (remaining.length > 3) {
+    let clipped = false;
+    for (let k = 0; k < remaining.length; k++) {
+      const a = remaining[(k+remaining.length-1)%remaining.length], b = remaining[k], c = remaining[(k+1)%remaining.length];
+      if (sign*cross(p[a],p[b],p[c]) <= eps) continue;
+      const contains = remaining.some(i => i!==a && i!==b && i!==c &&
+        sign*cross(p[a],p[b],p[i]) >= -eps && sign*cross(p[b],p[c],p[i]) >= -eps && sign*cross(p[c],p[a],p[i]) >= -eps);
+      if (contains) continue;
+      result.push([a,b,c]); remaining.splice(k,1); clipped = true; break;
+    }
+    if (!clipped) {
+      const collinear = remaining.findIndex((b,k) => Math.abs(cross(p[remaining[(k+remaining.length-1)%remaining.length]],p[b],p[remaining[(k+1)%remaining.length]])) <= eps);
+      if (collinear < 0) throw new Error("Cannot triangulate face " + face.id);
+      remaining.splice(collinear,1);
+    }
+  }
+  if (remaining.length === 3) result.push([...remaining]);
+  return result;
+}
+
 function faceOutlineEdges(faces) {
   const edges = new Map();
   for (const face of faces) face.v.forEach((a, i) => {
@@ -380,6 +497,29 @@ function pieceUprightAngle(flat, world) {
   if (Math.hypot(gx, gy) < 1e-6) return null;
   return Math.atan2(gx, -gy) * 180 / Math.PI;
 }
+function uprightCropRotation(model, faces, selectedFace) {
+  const candidates = [];
+  for (const index of faces) {
+    if (model.isTab(index)) continue;
+    const face = model.faces[index];
+    for (let k = 1; k + 1 < face.v.length; k++) {
+      const ids = [0, k, k + 1], flat = ids.map(i => face.flat[i]);
+      const area = Math.abs((flat[1][0] - flat[0][0]) * (flat[2][1] - flat[0][1]) -
+        (flat[2][0] - flat[0][0]) * (flat[1][1] - flat[0][1]));
+      const angle = pieceUprightAngle(flat, ids.map(i => model.vertices[face.v[i]]));
+      if (angle !== null) candidates.push({angle, area, selected: index === selectedFace});
+    }
+  }
+  candidates.sort((a, b) => Number(b.selected) - Number(a.selected) || b.area - a.area);
+  return candidates.length ? -candidates[0].angle : 0;
+}
+function rotatedCropBounds(view, angle) {
+  const [x, y, w, h] = view, cx = x + w / 2, cy = y + h / 2;
+  const radians = angle * Math.PI / 180, c = Math.abs(Math.cos(radians)), s = Math.abs(Math.sin(radians));
+  const width = w * c + h * s, height = w * s + h * c;
+  return [cx - width / 2, cy - height / 2, width, height];
+}
+
 function orientPieceIdentifiers(exportText, model) {
   if (!exportText) return exportText;
   const doc = new DOMParser().parseFromString(exportText, "image/svg+xml");
@@ -389,8 +529,8 @@ function orientPieceIdentifiers(exportText, model) {
     for (const text of group.querySelectorAll('text[data-piece-number]')) {
       const x = Number(text.getAttribute("x")), y = Number(text.getAttribute("y"));
       const candidates = [];
-      for (const face of faces) for (let k = 1; k + 1 < face.v.length; k++) {
-        const ids = [0, k, k + 1], flat = ids.map(i => face.flat[i]);
+      for (const face of faces) for (const ids of faceTriangles(face)) {
+        const flat = ids.map(i => face.flat[i]);
         const bary = flatBarycentric([x + offset.x, y + offset.y], ...flat);
         if (!bary) continue;
         const angle = pieceUprightAngle(flat, ids.map(i => model.vertices[face.v[i]]));
@@ -401,7 +541,7 @@ function orientPieceIdentifiers(exportText, model) {
       const transform = "rotate(" + candidates[0].angle.toFixed(3) + " " + x + " " + y + ")";
       text.setAttribute("transform", transform);
       for (const path of group.querySelectorAll('path[data-piece-number]'))
-        if (path.getAttribute("data-piece-number") === text.getAttribute("data-piece-number")) path.setAttribute("transform", transform);
+        if (path.getAttribute("data-piece-number") === text.getAttribute("data-piece-number")) path.setAttribute("transform", "rotate(" + (candidates[0].angle - Number(path.getAttribute("data-frame-angle") || 0)) + " " + x + " " + y + ")");
     }
   }
   return new XMLSerializer().serializeToString(doc);
@@ -521,8 +661,8 @@ class FoldedView {
     this.materialNames = materials;
     this.materialIndex = new Map(materials.map((name, i) => [name, i]));
     faces.forEach((f, i) => {
-      for (let k = 1; k + 1 < f.v.length; k++) {
-        for (const v of [f.v[0], f.v[k], f.v[k + 1]]) pos.push(...V[v]);
+      for (const ids of faceTriangles(f)) {
+        for (const i of ids) pos.push(...V[f.v[i]]);
         this.triFace.push(i);
       }
     });
@@ -735,6 +875,34 @@ class FoldedView {
     const xAxis = anglePoint.sub(point).normalize();
     const normal = best.world[1].clone().sub(best.world[0]).cross(best.world[2].clone().sub(best.world[0])).normalize();
     return {point, xAxis, normal, worldAt: p => map([anchor[0] + p[0] - label.x, anchor[1] + p[1] - label.y])};
+  }
+  showInspection(marks) {
+    if (this.inspectionGroup) {
+      this.scene.remove(this.inspectionGroup);
+      this.inspectionGroup.traverse(node => {
+        node.geometry?.dispose(); node.material?.map?.dispose(); node.material?.dispose();
+      });
+    }
+    this.inspectionGroup = new THREE.Group();
+    for (const mark of marks) {
+      if (mark.kind === "corner") {
+        const canvas=document.createElement("canvas"); canvas.width=256;canvas.height=96;
+        const ctx=canvas.getContext("2d"); ctx.beginPath();ctx.arc(128,48,15,0,Math.PI*2);
+        ctx.lineWidth=9;ctx.strokeStyle="white";ctx.stroke();ctx.lineWidth=5;ctx.strokeStyle="#087df5";ctx.stroke();
+        ctx.font="bold 23px Arial";ctx.textAlign="center";ctx.lineWidth=5;ctx.strokeStyle="white";
+        ctx.strokeText(mark.mm.toFixed(1)+" mm",128,22);ctx.fillStyle="#087df5";ctx.fillText(mark.mm.toFixed(1)+" mm",128,22);
+        const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(canvas),depthTest:false,depthWrite:false}));
+        sprite.position.set(...this.model.vertices[mark.vertex]);sprite.scale.set(24,9,1);sprite.renderOrder=20;
+        this.inspectionGroup.add(sprite);
+      } else {
+        const [a,b]=mark.vertices.map(v=>new THREE.Vector3(...this.model.vertices[v]));
+        const direction=b.clone().sub(a),length=direction.length();if(length<1e-6)continue;
+        const mesh=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,length,8),new THREE.MeshBasicMaterial({color:0x087df5,depthTest:false,depthWrite:false}));
+        mesh.position.copy(a).add(b).multiplyScalar(0.5);mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),direction.normalize());mesh.renderOrder=19;
+        this.inspectionGroup.add(mesh);
+      }
+    }
+    this.scene.add(this.inspectionGroup);
   }
   setLabelMode(mode) {
     this.labelMode = mode;
@@ -1122,6 +1290,7 @@ class PatternView {
     for (const group of this.pieceGroups) {
       const draw = group.querySelector('g[data-operation="draw"]');
       if (!draw) continue;
+      styleViewerLabels(draw);
       if (exportDoc && !group.querySelector(".cricut-labels")) {
         const source = exportDoc.querySelector(`g[id="${CSS.escape(group.id)}"] g[data-operation="draw"]`);
         if (source) {
@@ -1135,6 +1304,7 @@ class PatternView {
         }
       }
       const copy = group.querySelector(".cricut-labels");
+      if (copy) styleViewerLabels(copy);
       draw.style.display = exportDoc && copy ? "none" : "";
       if (copy) copy.style.display = exportDoc ? "" : "none";
     }
@@ -1200,7 +1370,7 @@ class PatternView {
       const xs = faces.flatMap(i => this.model.faces[i].flat.map(p => p[0] + o.x)), ys = faces.flatMap(i => this.model.faces[i].flat.map(p => p[1] + o.y));
       if (!xs.length) continue;
       const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, h = Math.max(...ys) - y0;
-      const pad = 0.06 * Math.max(w, h, 10), view = [x0 - pad, y0 - pad, w + 2 * pad, h + 2 * pad];
+      const pad = Math.max(0.06 * Math.max(w, h, 10), (this.inspectionTargets || []).some(mark => mark.piece === piece) ? 8 : 0), view = [x0 - pad, y0 - pad, w + 2 * pad, h + 2 * pad];
       const svg = document.createElementNS(SVGNS, "svg");
       svg.setAttribute("viewBox", view.join(" ")); svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
       const clip = document.createElementNS(SVGNS, "clipPath"), rect = document.createElementNS(SVGNS, "rect");
@@ -1233,6 +1403,7 @@ class PatternView {
         const p = this.polys[i].cloneNode(); p.style.display = ""; svg.append(p); this.cropPolys.push(p);
       }
       if (cropLabels) svg.append(cropLabels);
+      drawInspectionMarks(svg, (this.inspectionTargets || []).filter(mark => mark.piece === piece), o);
       if (glue) {
         const ends = glue.piece === piece ? [glue.v[0], glue.v[1]] : [glue.v[2], glue.v[3]];
         const [a, b] = ends.map(v => flatOf(piece, v));
@@ -1244,6 +1415,13 @@ class PatternView {
           svg.append(line);
         }
       }
+      // Rotate the entire cut-out, including scan, folds, labels and click targets.
+      const angle = uprightCropRotation(this.model, faces, this.selectedFace);
+      const content = document.createElementNS(SVGNS, "g");
+      content.setAttribute("transform", "rotate(" + angle + " " + (view[0] + view[2] / 2) + " " + (view[1] + view[3] / 2) + ")");
+      while (svg.firstChild) content.append(svg.firstChild);
+      svg.append(content);
+      svg.setAttribute("viewBox", rotatedCropBounds(view, angle).join(" "));
       const figure = document.createElement("figure"), caption = document.createElement("figcaption");
       const role = glue ? (glue.piece === glue.tab_piece ? " (edge and tab)" : piece === glue.piece ? " (edge)" : " (tab)") : "";
       caption.textContent = `${piece}${role} · ${this.model.pieces[piece]?.material || ""}`;
@@ -1318,8 +1496,9 @@ class PatternView {
 }
 
 class Viewer {
-  constructor(model, svgText, exportText, labels, cricutRows) {
+  constructor(model, svgText, exportText, labels, cricutRows, edgeRows = [], edgeChecksAvailable = true) {
     this.model = model;
+    this.edgeRows = edgeRows; this.edgeChecksAvailable = edgeChecksAvailable;
     this.cricutRows = cricutRows;
     const pick = (face, from) => this.select(face, from);
     const contextMenu = (face, x, y) => this.showFaceMenu(face, x, y);
@@ -1544,6 +1723,7 @@ class Viewer {
     const select = document.getElementById("inspection-list"), issues = [];
     const short = piece => piece.replace(/^piece-/, "");
     const addGroup = (label, entries) => {
+      entries = entries.filter(entry => inspectionMatchesMaterial(entry, document.getElementById("material-filter").value, this.model.pieces));
       if (!entries.length) return;
       const group = document.createElement("optgroup"); group.label = `${label} (${entries.length})`;
       for (const entry of entries) {
@@ -1553,27 +1733,43 @@ class Viewer {
       }
       select.append(group);
     };
-    const glues = this.model.glues.filter(g => this.model.isOpen(g)).sort((a, b) => b.gap_mm - a.gap_mm);
-    const glueEntry = g => ({pieces: [...new Set([g.piece, g.tab_piece])], glue: g,
-      label: `${g.number}: ${short(g.piece)} ↔ ${short(g.tab_piece)} · ${g.gap_mm} mm`,
-      reason: `Glue ${g.number}: ${g.status}, gap ${g.gap_mm} mm`});
-    addGroup("Open joins", glues.filter(g => !g.status.startsWith("proposed")).map(glueEntry));
-    addGroup("Piece shape / corner issues", Object.entries(this.model.pieces)
-      .filter(([piece, data]) => data.inspect && this.model.facesOf.has(piece))
-      .map(([piece, data]) => ({pieces: [piece, data.twin].filter(p => p && this.model.facesOf.has(p)),
-        label: `${short(piece)} · ${data.inspect}`, reason: `${piece}: ${data.inspect}`})));
-    addGroup("Unconfirmed joins", glues.filter(g => g.status.startsWith("proposed")).map(glueEntry));
+    const refresh = () => {
+      const previous = select.value === "" ? null : issues[Number(select.value)];
+      const hadSelection = select.value !== "";
+      issues.length = 0;
+      const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = "Choose an issue…";
+      select.replaceChildren(placeholder);
+    const entries = buildInspectionIssues(this.model, this.edgeRows, this.cricutRows, document.getElementById("label-mode").value);
+    addGroup("● Errors — confirmed conflicts", entries.filter(e=>e.severity==="error"));
+    addGroup("● Needs checking — uncertain, not necessarily wrong", entries.filter(e=>e.severity==="warning"));
+    if (document.getElementById("show-confirmed").checked)
+      addGroup("● Confirmed — reviewed and accepted", entries.filter(e=>e.severity==="confirmed"));
+    for (const option of select.querySelectorAll("optgroup option")) {
+      const issue = issues[Number(option.value)];
+      option.style.color = {error:"#ff8585",warning:"#ffd166",confirmed:"#8bdd9b"}[issue.severity];
+      option.textContent = `${{error:"ERROR",warning:"CHECK",confirmed:"CONFIRMED"}[issue.severity]} · ${issue.label}`;
+    }
     select.disabled = !issues.length;
-    if (!issues.length) select.options[0].textContent = "Nothing flagged";
+    const errors = issues.filter(e=>e.severity==="error").length, warnings = issues.filter(e=>e.severity==="warning").length;
+    select.options[0].textContent = this.edgeChecksAvailable ? `${errors} errors · ${warnings} need checking${issues.length ? " — choose an issue…" : " for this cardstock"}` : "Source edge checks unavailable — inspection is incomplete";
+      const retained = hadSelection && previous ? issues.findIndex(issue => issue.reason === previous.reason) : -1;
+      select.value = retained >= 0 ? String(retained) : "";
+      if (retained < 0) this.setInspection(null);
+    };
+    refresh();
+    document.getElementById("material-filter").addEventListener("change", refresh);
+    document.getElementById("label-mode").addEventListener("change", refresh);
+    document.getElementById("show-confirmed").addEventListener("change", refresh);
     select.addEventListener("change", () => {
-      if (select.value === "") return;
+      if (select.value === "") { this.setInspection(null); return; }
       const issue = issues[Number(select.value)], [first, ...others] = issue.pieces;
       const filter = document.getElementById("material-filter");
-      if (filter.value && issue.pieces.some(p => this.model.pieces[p]?.material !== filter.value)) {
+      if (filter.value && !inspectionMatchesMaterial(issue, filter.value, this.model.pieces)) {
         filter.value = ""; filter.dispatchEvent(new Event("change"));
       }
       document.getElementById("pair-bar").hidden = true;
       document.getElementById("find-text").value = "";
+      this.setInspection(issue);
       this.folded.relatedPieces = others; this.pattern.only = new Set(issue.pieces);
       this.folded.paint(first, null); this.pattern.paint(first, null);
       this.folded.focusPiece(issue.pieces);
@@ -1647,8 +1843,15 @@ class Viewer {
       + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${judge ? `${judge} for you to judge (${this.model.pieces[piece]?.material}) · ` : ""}${unlike ? "shapes differ · " : ""}`
       + (trouble ? `${trouble} open glue${trouble === 1 ? "" : "s"} or wrong-way fold${trouble === 1 ? "" : "s"}` : "nothing flagged");
   }
+  setInspection(issue) {
+    const marks = inspectionMarks(this.model, issue);
+    this.folded.showInspection(marks); this.pattern.inspectionTargets = marks;
+    this.pattern.found.querySelectorAll(".inspection-marks").forEach(node=>node.remove());
+  }
   select(face, from, recenter = true) {
     const f = this.model.faces[face];
+    this.setInspection(null);
+    this.folded.relatedPieces = [];
     this.folded.paint(f.piece, face); this.pattern.paint(f.piece, face);
     // Picked in 3D: the 2D side shows just that piece, cut from its page scan.
     if (from === "3d") {
@@ -1757,15 +1960,16 @@ class Viewer {
 
 try {
   const labelsUrl = modelName ? `/api/labels?model=${encodeURIComponent(modelName)}` : "";
-  const [data, svgText, exportText, cricutRows] = await Promise.all([
+  const [data, svgText, exportText, cricutRows, edgeChecks] = await Promise.all([
     fetch(jsonUrl).then(r => { if (!r.ok) throw new Error(`${jsonUrl}: ${r.status}`); return r.json(); }),
     fetch(svgUrl).then(r => { if (!r.ok) throw new Error(`${svgUrl}: ${r.status}`); return r.text(); }),
     fetch(exportUrl).then(r => r.ok ? r.text() : "").catch(() => ""),  // optional: Cricut labels
     labelsUrl ? fetch(labelsUrl).then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+    modelName ? fetch(`/api/edge-checks?model=${encodeURIComponent(modelName)}`).then(r=>r.ok?r.json():null).catch(()=>null) : Promise.resolve(null),
   ]);
   const model = new Model(data);
   const orientedExport = orientPieceIdentifiers(exportText, model);
-  window.viewer = new Viewer(model, svgText, orientedExport, readPrintLabels(svgText, cricutRows, model, orientedExport), cricutRows);
+  window.viewer = new Viewer(model, svgText, orientedExport, readPrintLabels(svgText, cricutRows, model, orientedExport), cricutRows, edgeChecks || [], edgeChecks !== null);
   window.addEventListener("message", event => {
     if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
         event.data?.type !== "review-select-piece") return;

@@ -1,0 +1,17 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('app/fold3d-viewer.html','utf8');
+const start=html.indexOf('function buildInspectionIssues(');
+assert.ok(start>=0,'shared severity builder exists');
+const fn=vm.runInNewContext('('+html.slice(start,html.indexOf('\n}\n',start)+2)+')');
+const model={pieces:{a:{material:'yellow'},b:{material:'green'},c:{inspect:'a corner 1 mm off'},d:{accepted_inspection:'reviewed'}},glues:[{number:'556',piece:'a',tab_piece:'b',status:'closes',gap_mm:.1}],isOpen:g=>g.status!=='closes'};
+const edges=[{number:'753',piece:'a',partner_piece:'b',status:'length mismatch',length_mm:'29.3',partner_length_mm:'21.6',flat:[[0,0],[1,1]]}];
+const labels=[{pdf_number:'556',pieces:'a',label:'7R'},{pdf_number:'556',pieces:'b',label:'7W'},{pdf_number:'753',pieces:'a b',label:'EC'}];
+let issues=fn(model,edges,labels,'cricut');
+assert.ok(issues.some(i=>i.severity==='error' && i.label.includes('7R') && i.label.includes('7W')));
+const warning=issues.find(i=>i.edgeRows);
+assert.equal(warning.severity,'warning');assert.match(warning.label,/EC/);assert.match(warning.reason,/29.3.*21.6/);
+assert.ok(issues.some(i=>i.severity==='confirmed'));
+assert.match(fn(model,edges,labels,'pdf').find(i=>i.edgeRows).label,/753/);
+assert.equal(fn(model,edges.map(r=>({...r,accepted:true})),labels,'pdf').find(i=>i.edgeRows).severity,'confirmed');
+assert.match(html,/inspection-legend/);assert.match(html,/show-confirmed/);
+console.log('Verified omitted source joins, label conflicts, accepted findings, and current label formatting.');

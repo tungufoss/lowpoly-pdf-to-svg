@@ -927,6 +927,9 @@ class CornerAdjuster:
             if reasons:
                 inspect.append({"piece": pid, "worst_corner_mm": f"{worst_mm:.2f}" if pid in shifts else "",
                                 "reason": "; ".join(reasons)})
+        accepted_path = self.recon.svg.with_name("fold3d-accepted-corners.json")
+        accepted = json.loads(accepted_path.read_text(encoding="utf-8")) if accepted_path.is_file() else {}
+        inspect = [row for row in inspect if accepted.get(row["piece"]) != row["reason"]]
         return moves, inspect
 
 
@@ -1984,6 +1987,10 @@ class Reconstruction:
                 "faces": faces, "glues": glues,
                 "wrong_folds": [[int(h[0]), int(h[1])] for h in self.solver.hinge[wrong]],
                 "colours": {m: "#%02x%02x%02x" % tuple(int(255 * c) for c in rgb) for m, rgb in MATERIAL_RGB.items()}}
+        from .inspection import inspection_targets
+        targets = inspection_targets(data)
+        for pid, marks in targets.items():
+            data["pieces"][pid]["inspection_targets"] = marks
         path.write_text(json.dumps(data, separators=(",", ":")))
 
     def _obj(self, path: Path, x: np.ndarray) -> None:

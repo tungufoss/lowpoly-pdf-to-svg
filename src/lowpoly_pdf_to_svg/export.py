@@ -317,6 +317,10 @@ class ExportWriter:
             for attribute in ("fill", "data-review"):  # the review's orange "unsure" mark
                 text.attrib.pop(attribute, None)
 
+        model_path = target.with_name("fold3d.json")
+        if model_path.is_file():
+            from .identifier_orientation import orient_identifiers
+            orient_identifiers(root, json.loads(model_path.read_text(encoding="utf-8")))
         ET.indent(tree, space="")
         target.parent.mkdir(parents=True, exist_ok=True)
         tree.write(target, encoding="UTF-8", xml_declaration=True)

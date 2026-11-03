@@ -1,0 +1,12 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('app/fold3d-viewer.html','utf8');
+const start=html.indexOf('function inspectionMatchesMaterial(');
+assert.ok(start>=0,'inspection filter helper exists');
+const fn=vm.runInNewContext('('+html.slice(start,html.indexOf('\n}\n',start)+2)+')');
+const pieces={a:{material:'brown'},b:{material:'rust'},c:{material:'green'}};
+assert.equal(fn({pieces:['a','b']},'brown',pieces),true);
+assert.equal(fn({pieces:['a','b']},'rust',pieces),true);
+assert.equal(fn({pieces:['a','b']},'green',pieces),false);
+assert.equal(fn({pieces:['a']},'',pieces),true);
+assert.match(html,/material-filter"\)\.addEventListener\("change", refresh/);
+console.log('Verified inspection filtering includes either side of cross-cardstock joins and updates on filter changes.');
