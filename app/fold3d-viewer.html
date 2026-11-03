@@ -211,9 +211,16 @@ import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 
 const params = new URLSearchParams(location.search);
 // Only files from this site: the SVGs are imported into the page, so a shared link must not load them from elsewhere.
+function showError(message) {
+  const box = document.createElement("div"), code = document.createElement("code");
+  box.id = "error"; code.textContent = "make -f fold3d.mk view";
+  box.append(`Could not load the model: ${message}. Run `, code, " and open the address it prints.");
+  document.querySelector("main").replaceChildren(box);
+}
 const sameOrigin = (url, name) => {
-  if (new URL(url, location.href).origin !== location.origin) throw new Error(`${name} must be on this site`);
-  return url;
+  if (new URL(url, location.href).origin === location.origin) return url;
+  showError(`${name} must be a file on this site`);
+  throw new Error(`${name} must be on this site`);
 };
 const jsonUrl = sameOrigin(params.get("json") || "../data/example/fold3d.json", "json");
 const svgUrl = sameOrigin(params.get("svg") || "../data/example/example.svg", "svg");
@@ -1579,10 +1586,7 @@ try {
   if (window.parent !== window)
     window.parent.postMessage({type: "fold3d-ready"}, location.origin);
 } catch (err) {
-  const box = document.createElement("div"), code = document.createElement("code");
-  box.id = "error"; code.textContent = "make -f fold3d.mk view";
-  box.append(`Could not load the model: ${err.message}. Run `, code, " and open the address it prints.");
-  document.querySelector("main").replaceChildren(box);
+  showError(err.message);
 }
 </script>
 </body>
