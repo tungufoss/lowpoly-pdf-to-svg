@@ -108,7 +108,7 @@ class PartitionModel:
 
     def cost(self, faces: frozenset) -> float:
         lay = self.pool.pieces[faces]
-        c = 20 + 60 * (lay.area() < TINY_MM2)
+        c = 20 + 60 * (lay.area() < TINY_MM2) + segment.BOX_WEIGHT * lay.box_area()
         for i in faces:
             for _, a, b in self.mesh.faces[i].edges():
                 edge = frozenset((a, b))

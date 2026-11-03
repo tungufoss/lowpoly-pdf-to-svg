@@ -41,7 +41,9 @@ STRAIGHT_DEG = 15.0  # a seam bending more than this starts a new run: a new tab
 MIRROR_MM = 10.0      # a face's mirror: the face nearest its reflection, both ways, within this
 DART_MM = 0.0         # a dart's slit narrower than this counts as a short seam (partition.py --dart-mm)
 TINY_MM2 = 600.0     # a piece smaller than this (about 25 x 25 mm) is fiddly to fold and glue
-SHEET_MM = (180.0, 267.0)   # A4 less a 15 mm border for tabs and the cutting mat's grip
+SHEET_MM = (180.0, 249.0)   # A4 and Letter (the smaller of each side) less a 15 mm border for tabs
+SHEET_AREA = SHEET_MM[0] * SHEET_MM[1]
+BOX_WEIGHT = 20 / SHEET_AREA  # a sheet's worth of bounding boxes costs as much as one piece
 
 
 @dataclass
@@ -281,6 +283,12 @@ class Layout:
         xy = np.array(box.exterior.coords)[:4]
         return sorted(np.linalg.norm(xy[1:3] - xy[0:2], axis=1))
 
+    def box_area(self) -> float:
+        """Area of the smallest rectangle round the piece: what it takes on a sheet, roughly.
+        Long, bent or spiky pieces waste card between them."""
+        a, b = self.size()
+        return a * b
+
     def area(self) -> float:
         return sum(abs(_shoelace(p)) for p in self.placed.values())
 
@@ -426,9 +434,11 @@ class Segmentation:
         labels = {self.piece[i] for i in self.region}
         tiny = sum(self.layout[lab].area() < TINY_MM2 for lab in labels)
         length = sum(r["length_mm"] for r in runs)
+        box = sum(self.layout[lab].box_area() for lab in labels)
         parts = {"short_seams": short, "seams": len(runs), "darts": darts, "pieces": len(labels),
-                 "tiny_pieces": tiny, "seam_mm": round(length, 1)}
-        return 100 * short + 60 * tiny + 20 * len(labels) + 5 * len(runs) + 10 * darts + length / 10, parts
+                 "tiny_pieces": tiny, "seam_mm": round(length, 1), "sheets": round(box / SHEET_AREA, 2)}
+        return (100 * short + 60 * tiny + 20 * len(labels) + 5 * len(runs) + 10 * darts + length / 10
+                + BOX_WEIGHT * box), parts
 
     def mirror_label(self, label: str) -> str | None:
         m = self.mesh.mirror_face.get(self.members(label)[0])
