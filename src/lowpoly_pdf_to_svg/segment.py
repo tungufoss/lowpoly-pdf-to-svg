@@ -474,7 +474,9 @@ class Report:
                             round(self.rank[key], 3) if key in self.rank else ""])
 
     def svg(self, path: Path, colours: dict[str, str]):
-        """Each piece laid flat in a row: cut outline solid, folds dashed, darts red."""
+        """Each piece laid flat in a row: cut outline solid, folds dashed. A dart (a slit
+        the piece glues to itself) is cut on one side only; the slit between its two sides
+        stays on the piece as a glue flap, with a red score line where the cut edge lands."""
         out, x, y, row_h = [], 10.0, 10.0, 0.0
         width = 400.0
         for label in sorted(self.seg.layout, key=self.names.get):
@@ -490,10 +492,25 @@ class Report:
                 out.append(f'<polygon points="{pts}" fill="{colour}" fill-opacity="0.35" stroke="none"/>')
             for i, p in lay.placed.items():
                 for k, a, b in self.mesh.faces[i].edges():
-                    kind = self.seg.edge_kind(frozenset((a, b)))
+                    edge = frozenset((a, b))
+                    kind = self.seg.edge_kind(edge)
                     p0, p1 = p[k], p[(k + 1) % len(p)]
+                    if kind == "dart" and i != min(f for f, _ in self.mesh.edge_faces[edge]):
+                        # the dart's second side: kept as a glue flap filling the slit, scored
+                        # where the cut side lands, so folding closes the dart onto the flap
+                        other = min(f for f, _ in self.mesh.edge_faces[edge])
+                        q = lay.placed[other]
+                        q0, q1 = lay.corner(other, a), lay.corner(other, b)
+                        flap = Polygon([p0, p1, q1, q0]).buffer(0)   # the slit itself: glued under the cut side
+                        for g in getattr(flap, "geoms", [flap]):
+                            if g.geom_type == "Polygon" and g.area > 1:
+                                pts = " ".join(f"{u + dx:.2f},{v + dy:.2f}" for u, v in g.exterior.coords)
+                                out.append(f'<polygon points="{pts}" fill="{colour}" fill-opacity="0.15" '
+                                           f'stroke="#000" stroke-width="0.4"/>')
+                        kind = "score"
                     style = {"fold": 'stroke="#555" stroke-dasharray="2,1.5"',
-                             "dart": 'stroke="#d00"'}.get(kind, 'stroke="#000"')
+                             "score": 'stroke="#d00" stroke-dasharray="1,1"',
+                             "dart": 'stroke="#000"'}.get(kind, 'stroke="#000"')
                     out.append(f'<line x1="{p0[0] + dx:.2f}" y1="{p0[1] + dy:.2f}" x2="{p1[0] + dx:.2f}" '
                                f'y2="{p1[1] + dy:.2f}" {style} stroke-width="0.4"/>')
             c = lay.outline().representative_point()
@@ -504,6 +521,16 @@ class Report:
         h = y + row_h + 10
         path.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width + 20}mm" height="{h:.0f}mm" '
                         f'viewBox="0 0 {width + 20} {h:.0f}">\n' + "\n".join(out) + "\n</svg>\n")
+
+    @staticmethod
+    def _flap(p0: np.ndarray, p1: np.ndarray, inside: np.ndarray, depth: float = 7.5) -> Polygon:
+        """A tab on edge p0-p1, on the side away from `inside`, ends sloped at 45 degrees."""
+        d = p1 - p0
+        n = np.array([-d[1], d[0]]) / (np.linalg.norm(d) or 1.0)
+        if (inside - p0) @ n > 0:
+            n = -n
+        inset = min(depth, np.linalg.norm(d) / 2) * d / (np.linalg.norm(d) or 1.0)
+        return Polygon([p0, p1, p1 - inset + depth * n, p0 + inset + depth * n])
 
     @staticmethod
     def preview(mesh: Mesh, segs: list[tuple[str, Segmentation]], path: Path):
