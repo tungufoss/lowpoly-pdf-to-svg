@@ -210,12 +210,17 @@ import * as THREE from "three";
 import { TrackballControls } from "three/addons/controls/TrackballControls.js";
 
 const params = new URLSearchParams(location.search);
-const jsonUrl = params.get("json") || "../data/example/fold3d.json";
-const svgUrl = params.get("svg") || "../data/example/example.svg";
+// Only files from this site: the SVGs are imported into the page, so a shared link must not load them from elsewhere.
+const sameOrigin = (url, name) => {
+  if (new URL(url, location.href).origin !== location.origin) throw new Error(`${name} must be on this site`);
+  return url;
+};
+const jsonUrl = sameOrigin(params.get("json") || "../data/example/fold3d.json", "json");
+const svgUrl = sameOrigin(params.get("svg") || "../data/example/example.svg", "svg");
 const modelName = params.get("model") || jsonUrl.match(/\/data\/([^/]+)\//)?.[1] || "";
 // The Cricut export (make export) next to the SVG, for the "Cricut labels" switch; optional.
-const exportUrl = params.get("export") || (svgUrl.startsWith("/api/svg")
-  ? svgUrl.replace("/api/svg", "/api/export") : svgUrl.replace(/\.svg($|\?)/, "-export.svg$1"));
+const exportUrl = sameOrigin(params.get("export") || (svgUrl.startsWith("/api/svg")
+  ? svgUrl.replace("/api/svg", "/api/export") : svgUrl.replace(/\.svg($|\?)/, "-export.svg$1")), "export");
 const SVGNS = "http://www.w3.org/2000/svg";
 
 class Model {
@@ -670,7 +675,7 @@ class FoldedView {
     const c = this.mesh.geometry.attributes.color, ci = this.inner.geometry.attributes.color, pick = new THREE.Color(0x4f8cff);
     const white = new THREE.Color(0xffffff), tintMix = 1 - this.backTint / 100, recut = new THREE.Color(0xd1495b);
     this.triFace.forEach((f, t) => {
-      let colour = this.base[f].clone();
+      let colour = this.model.isTab(f) ? white.clone() : this.base[f].clone();
       if (this.model.recut.has(this.model.faces[f].piece)) colour.lerp(recut, 0.7);
       if (f === face || relatedFaces.has(f)) colour = pick.clone();
       else if (piece && this.model.faces[f].piece === piece) colour.lerp(pick, 0.45);
@@ -1553,6 +1558,16 @@ try {
     fetch(exportUrl).then(r => r.ok ? r.text() : "").catch(() => ""),  // optional: Cricut labels
     labelsUrl ? fetch(labelsUrl).then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
   ]);
+  // Without the review server (e.g. the Pages site), Find reads the Cricut labels from the export SVG.
+  if (!cricutRows.length && exportText) {
+    const byLabel = new Map();
+    const doc = new DOMParser().parseFromString(exportText, "image/svg+xml");
+    for (const text of doc.querySelectorAll("text[data-label]")) {
+      const piece = text.closest("[data-piece]")?.getAttribute("data-piece");
+      if (piece) byLabel.set(text.getAttribute("data-label"), (byLabel.get(text.getAttribute("data-label")) || new Set()).add(piece));
+    }
+    for (const [label, pieces] of byLabel) cricutRows.push({label, pieces: [...pieces].join(" ")});
+  }
   const model = new Model(data);
   window.viewer = new Viewer(model, svgText, exportText, readPrintLabels(svgText, cricutRows, model, exportText), cricutRows);
   window.addEventListener("message", event => {
@@ -1564,8 +1579,10 @@ try {
   if (window.parent !== window)
     window.parent.postMessage({type: "fold3d-ready"}, location.origin);
 } catch (err) {
-  document.querySelector("main").innerHTML = `<div id="error">Could not load the model: ${err.message}.
-    Run <code>make -f fold3d.mk view</code> and open the address it prints.</div>`;
+  const box = document.createElement("div"), code = document.createElement("code");
+  box.id = "error"; code.textContent = "make -f fold3d.mk view";
+  box.append(`Could not load the model: ${err.message}. Run `, code, " and open the address it prints.");
+  document.querySelector("main").replaceChildren(box);
 }
 </script>
 </body>
