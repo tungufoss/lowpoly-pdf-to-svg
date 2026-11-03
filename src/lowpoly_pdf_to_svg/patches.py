@@ -3,7 +3,9 @@
     python -m src.lowpoly_pdf_to_svg.patches --config data/bowser/bowser.yaml \
         --pieces piece-11-04 piece-11-05 --short-mm 15
 
-(or list the pieces under `patches: pieces:` in the YAML and leave out --pieces).
+(or leave out --pieces and list groups under `patches:` in the YAML, each with `pieces:`
+(ids or patterns such as piece-24-*), `short_mm:` and `joins: true` to patch only the seams
+joining the group to the rest, e.g. teeth to the jaw).
 
 For every glue pair on the listed pieces (and their twins) whose edge, or its mirror edge on
 the twins, is shorter than `--short-mm`, the two
@@ -12,7 +14,7 @@ most `--reach-mm` (one tape width) either side of the seam and kept `--margin-mm
 the faces' other edges, so the patch never has to bend anywhere but at the seam. It sits
 inside the model, under the pieces, so its score line is the seam's fold inverted (Helga:
 a second piece can overlap if the scoring is inverted). Each patch carries the seam's
-export label. Patches are packed in rows onto Letter sheets in one SVG,
+export label. Patches are packed in rows onto Letter sheets, one cardstock per sheet, in one SVG,
 <project>-patches.svg, with Cut, Score and Draw layers like the export.
 """
 
@@ -21,6 +23,7 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+from fnmatch import fnmatch
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -57,13 +60,18 @@ class PatchMaker:
         for pid, shape in self.shapes.items():
             self.retab._split(shape, tab_lines.get(pid, []))
 
-    def patches(self, pieces: set[str], short_mm: float) -> list[dict]:
+    def patches(self, pieces: set[str], short_mm: float, joins: bool = False) -> list[dict]:
+        """Patches for the glue edges on `pieces` shorter than `short_mm`; with `joins`, only
+        the seams that join the group to the rest of the model (teeth to the jaw)."""
         # A seam is patched when it or its mirror seam on the twins is short, so twins match.
         pieces = pieces | {self.retab.twin[p] for p in pieces if p in self.retab.twin}
         by_number = {(p, g.number): g for g in self.glues for p in g.pieces}
         wanted = set()
         for g in self.glues:
-            if g.kind and set(g.pieces) & pieces and self.shapes[g.edge.piece].line(g.edge).length < short_mm:
+            inside = set(g.pieces) & pieces
+            if joins and len(inside) == 2:
+                continue
+            if g.kind and inside and self.shapes[g.edge.piece].line(g.edge).length < short_mm:
                 wanted.add(id(g))
                 for p in g.pieces:
                     twin = by_number.get(self.retab.mirror_numbers.get((p, g.number)))
@@ -176,16 +184,25 @@ def main() -> int:
         with (folder / f"{project}-labels.csv").open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
                 labels[(row["pdf_number"], frozenset(row["pieces"].split()))] = row["label"]
-    config = raw.get("patches") or {}
-    wanted = args.pieces or [str(p) for p in config.get("pieces", [])]
-    if not wanted:
-        parser.error("no pieces: pass --pieces or list them under `patches: pieces:` in the YAML")
-    short_mm = args.short_mm or float(config.get("short_mm", 15.0))
-    pieces = {p if p.startswith("piece-") else f"piece-{p}" for p in wanted}
+    groups = raw.get("patches") or []
+    groups = [groups] if isinstance(groups, dict) else groups
+    if args.pieces:
+        groups = [{"pieces": args.pieces, "short_mm": args.short_mm or 15.0}]
+    if not groups:
+        parser.error("no pieces: pass --pieces or list them under `patches:` in the YAML")
     maker = PatchMaker(folder / f"{project}.svg", GluePairs.read(folder / "edge-numbers.csv"), labels,
                        args.reach_mm, args.margin_mm)
-    found = maker.patches(pieces, short_mm)
-    sheets = pack(found)
+    found, seen = [], set()
+    for group in groups:
+        patterns = [str(p) if str(p).startswith("piece-") else f"piece-{p}" for p in group.get("pieces", [])]
+        pieces = {pid for pid in maker.shapes if any(fnmatch(pid, pattern) for pattern in patterns)}
+        for patch in maker.patches(pieces, args.short_mm or float(group.get("short_mm", 15.0)),
+                                   bool(group.get("joins", False))):
+            if patch["seam"] + patch["label"] not in seen:
+                seen.add(patch["seam"] + patch["label"])
+                found.append(patch)
+    sheets = [sheet for material in sorted({p["material"] or "" for p in found})   # one cardstock per sheet
+              for sheet in pack([p for p in found if (p["material"] or "") == material])]
     target = folder / f"{project}-patches.svg"
     write(sheets, colors, target)
     print(f"{target}: {len(found)} patches on {len(sheets)} sheet(s)")
