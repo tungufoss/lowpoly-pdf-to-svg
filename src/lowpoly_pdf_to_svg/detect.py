@@ -76,6 +76,7 @@ class PageDetector:
         self.s = settings or DetectorSettings()
         # Which fold each line style means; set per template in the project YAML.
         self.folds = folds or {"dash_dot": FoldKind.MOUNTAIN, "dashed": FoldKind.VALLEY}
+        self._fold_scans = {}
 
     def _masks(self, page: PageImage):
         """Split the page ink into solid cut lines, number glyphs and fold dashes."""
@@ -106,12 +107,18 @@ class PageDetector:
         """Style of the printed fold between a and b (page px), or None when too little
         dash ink lies along it to tell (a fold drawn where the scan shows none)."""
         if getattr(self, "_dash_page", None) is not page:
-            self._dash_page, self._dash = page, self._masks(page)[-1]
+            # Mirror checks alternate pages. Keep only the compact dash masks, rather than
+            # repeating full-page connected-component analysis at every switch.
+            key = id(page)
+            if key not in self._fold_scans:
+                dash = self._masks(page)[-1]
+                self._fold_scans[key] = (page, dash, cv2.dilate(dash, _kernel(3)))
+            self._dash_page, self._dash, self._dash_tolerant = self._fold_scans[key]
         px = 1.0 / page.mm_per_px
         steps = max(2, int(math.dist(a, b) * 2))
         xs = np.linspace(a[0], b[0], steps).round().astype(int).clip(0, self._dash.shape[1] - 1)
         ys = np.linspace(a[1], b[1], steps).round().astype(int).clip(0, self._dash.shape[0] - 1)
-        if cv2.dilate(self._dash, _kernel(3))[ys, xs].mean() < 0.3:
+        if self._dash_tolerant[ys, xs].mean() < 0.3:
             return None
         return self._fold_kind(self._dash, a, b, px)
 

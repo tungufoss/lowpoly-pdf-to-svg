@@ -1,5 +1,6 @@
 status,verdict,n
-extra copy: likely misread,needs work,11
-ok,matching,1544
-printed 3 times,needs work,3
-unpaired,needs work,15
+extra copy: likely misread,needs work,5
+length mismatch,needs work,6
+no tab,needs work,4
+ok,matching,1548
+unpaired,needs work,6

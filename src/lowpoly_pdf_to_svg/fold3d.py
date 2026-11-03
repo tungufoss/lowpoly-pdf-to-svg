@@ -97,7 +97,9 @@ class FlatPiece:
         for a, b, _ in self.folds:
             a, b = np.asarray(a), np.asarray(b)
             u = (b - a) / max(np.hypot(*(b - a)), 1e-9)
-            lines.append(LineString([a - u * SNAP_MM, b + u * SNAP_MM]))  # reach the cut line
+            # Keep the exact endpoints as nodes: extending straight through a
+            # concave corner can miss its boundary by floating-point roundoff.
+            lines.append(LineString([a - u * SNAP_MM, a, b, b + u * SNAP_MM]))
         for corner in outline.exterior.coords[:-1]:
             self.vertex(corner)
         for a, b, _ in self.folds:
@@ -228,8 +230,22 @@ class Glue:
 class GlueFinder:
     """Pairs the two copies of each number: one plain cut edge, one tab fold, same length."""
 
-    def __init__(self, pieces: list[FlatPiece]):
+    def __init__(self, pieces: list[FlatPiece], confirmed: dict[str, list[frozenset]] | None = None):
         self.pieces = {p.id: p for p in pieces}
+        self.confirmed = confirmed or {}  # number -> piece pairs from export: confirmed_joins:
+
+    @staticmethod
+    def confirmed_pairs(svg: Path) -> dict[str, list[frozenset]]:
+        """The YAML's confirmed joins, so the 3D glue uses the same pairs as the export."""
+        config = svg.with_suffix('.yaml')
+        if not config.is_file():
+            return {}
+        import yaml
+        records = (yaml.safe_load(config.read_text(encoding='utf-8')) or {}).get('export', {}).get('confirmed_joins', [])
+        pairs = collections.defaultdict(list)
+        for r in records:
+            pairs[str(r['number'])].append(frozenset(r['pieces']))
+        return dict(pairs)
 
     def find(self) -> tuple[list[Glue], collections.Counter]:
         copies = collections.defaultdict(list)
@@ -241,6 +257,22 @@ class GlueFinder:
         for number, found in copies.items():
             plain = [(p, self._oriented(p, l.edge)) for p, l in found if not l.tab]
             tabs = [(q, self._oriented(q, l.edge)) for q, l in found if l.tab]
+            # confirmed pairs first, exactly as listed; the remaining copies pair up as usual
+            for pair in self.confirmed.get(number, []):
+                match = sorted(((abs(p.length(*ab) - q.length(*cd)), i, j) for i, (p, ab) in enumerate(plain)
+                                for j, (q, cd) in enumerate(tabs) if ab and cd and {p.id, q.id} == set(pair)),
+                               key=lambda m: m[0])
+                match = [(plain[i][0], plain[i][1], tabs[j][0], tabs[j][1]) for _, i, j in match]
+                if not match:
+                    status["confirmed join not found"] += 1
+                    continue
+                p, ab, q, cd = match[0]
+                plain = [(r, e) for r, e in plain if not (r is p and e == ab)]
+                tabs = [(r, e) for r, e in tabs if not (r is q and e == cd)]
+                status["glued, confirmed"] += 1
+                glues.append(Glue(number, p.id, *ab, q.id, *cd, p.length(*ab), abs(p.length(*ab) - q.length(*cd))))
+            if self.confirmed.get(number) and not (plain and tabs):
+                continue
             # A number read more than twice: the plain edge and tab that agree best are the pair (as edges.py).
             options = sorted((abs(p.length(*ab) - q.length(*cd)), p, ab, q, cd)
                              for p, ab in plain for q, cd in tabs if ab and cd)
@@ -249,7 +281,7 @@ class GlueFinder:
                 continue
             diff, p, ab, q, cd = options[0]
             if diff > LENGTH_TOLERANCE_MM:
-                status["length mismatch"] += 1
+                status["extra copies left unpaired" if self.confirmed.get(number) else "length mismatch"] += 1
                 continue
             status["glued" if len(found) == 2 else "glued, best of extra copies"] += 1
             glues.append(Glue(number, p.id, *ab, q.id, *cd, p.length(*ab), diff))
@@ -925,6 +957,11 @@ class CornerAdjuster:
             if reasons:
                 inspect.append({"piece": pid, "worst_corner_mm": f"{worst_mm:.2f}" if pid in shifts else "",
                                 "reason": "; ".join(reasons)})
+        accepted_path = self.recon.svg.with_name("fold3d-accepted-corners.json")
+        accepted = json.loads(accepted_path.read_text(encoding="utf-8")) if accepted_path.is_file() else {}
+        # an accepted reason leaves the active list but is kept, so the viewer can show it as confirmed
+        self.accepted = {row["piece"]: row["reason"] for row in inspect if accepted.get(row["piece"]) == row["reason"]}
+        inspect = [row for row in inspect if row["piece"] not in self.accepted]
         return moves, inspect
 
 
@@ -1029,9 +1066,21 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
         tab_overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         tab_overrides = {}
+    confirmed = {}
+    config = svg.with_suffix('.yaml')
+    table = svg.with_name('edge-numbers.csv')
+    if config.is_file() and table.is_file():
+        import yaml
+        records = yaml.safe_load(config.read_text(encoding='utf-8')).get('export', {}).get('confirmed_joins', [])
+        identities = {(piece, str(r['number'])) for r in records for piece in r['pieces']}
+        with table.open(newline='', encoding='utf-8') as handle:
+            for row in csv.DictReader(handle):
+                if (row['piece'], row['number']) in identities:
+                    confirmed.setdefault(row['piece'], []).append(row)
     for piece in pieces:
         piece.split_faces()
         piece.mark_labels()
+        _apply_confirmed_edges(piece, confirmed.get(piece.id, []))
         piece.mark_tabs()
     twins = MirrorTwins.read(svg.with_name("mirror-mismatches.csv"))
     _tabs_from_twins(pieces, twins)
@@ -1052,6 +1101,24 @@ def read_pieces(svg: Path) -> list[FlatPiece]:
                     label.tab = override
     _drop_stale_tab_overrides(pieces, marked, twins)
     return pieces
+
+
+def _apply_confirmed_edges(piece: FlatPiece, records: list[dict]) -> None:
+    """The reviewed 2D edge assignment outranks the label-position heuristic."""
+    edges = list({tuple(sorted(edge)) for face in piece.faces for edge in piece.face_edges(face)})
+    for row in records:
+        values = [float(v) for v in row['line_mm'].split()]
+        if len(values) != 4:
+            raise ValueError(f"confirmed edge has no line: {piece.id}/{row['number']}")
+        a, b = np.asarray(values[:2]) + piece.page_origin, np.asarray(values[2:]) + piece.page_origin
+        def gap(edge):
+            p, q = (piece.points[v] for v in edge)
+            return min(max(np.linalg.norm(p-a), np.linalg.norm(q-b)), max(np.linalg.norm(p-b), np.linalg.norm(q-a)))
+        edge = min(edges, key=gap) if edges else None
+        labels = [label for label in piece.labels if label.text == row['number']]
+        if edge is None or gap(edge) > 2.0 or len(labels) != 1:
+            raise ValueError(f"confirmed edge no longer matches traced geometry: {piece.id}/{row['number']}")
+        labels[0].edge, labels[0].tab = edge, row['side'] == 'tab'
 
 
 def _tabs_from_twins(pieces: list[FlatPiece], twins: list[tuple[str, str]], tol_mm: float = 0.5) -> None:
@@ -1151,7 +1218,7 @@ class Reconstruction:
         FoldSolver.pinned_numbers = self._pins()
         self.pieces = read_pieces(self.svg)
         self.asm = Assembly(self.pieces)
-        glues, status = GlueFinder(self.pieces).find()
+        glues, status = GlueFinder(self.pieces, GlueFinder.confirmed_pairs(self.svg)).find()
         self.log(f"{len(self.pieces)} pieces, {len(self.asm.faces)} faces; numbers: "
                  + ", ".join(f"{n} {s}" for s, n in status.most_common()))
         self.proposed: set[int] = set()
@@ -1936,7 +2003,8 @@ class Reconstruction:
             glues.append({"number": g.number, "piece": g.piece, "tab_piece": g.other, "v": ends,
                           "gap_mm": round(float(gaps[k]), 1), "status": r["status"]})
         wrong = self.solver.wrong_folds(self.x)
-        inspect = {row["piece"]: row["reason"] for row in CornerAdjuster(self).rows()[1]}
+        adjuster = CornerAdjuster(self)
+        inspect = {row["piece"]: row["reason"] for row in adjuster.rows()[1]}
         notes = collections.defaultdict(list)
         for item in review:
             notes[item["piece"]].append(item["detail"])
@@ -1947,11 +2015,16 @@ class Reconstruction:
                 "vertices": [[round(float(c), 2) for c in p] for p in x],
                 "pieces": {pid: {"material": piece.material, "inspect": inspect.get(pid, ""),
                                       **({"twin": twin[pid]} if pid in twin else {}),
+                                      **({"accepted_inspection": adjuster.accepted[pid]} if pid in adjuster.accepted else {}),
                                       **({"review": notes[pid]} if pid in notes else {})}
                            for pid, piece in self.asm.pieces.items()},
                 "faces": faces, "glues": glues,
                 "wrong_folds": [[int(h[0]), int(h[1])] for h in self.solver.hinge[wrong]],
                 "colours": {m: "#%02x%02x%02x" % tuple(int(255 * c) for c in rgb) for m, rgb in MATERIAL_RGB.items()}}
+        from .inspection import inspection_targets
+        targets = inspection_targets(data)
+        for pid, marks in targets.items():
+            data["pieces"][pid]["inspection_targets"] = marks
         path.write_text(json.dumps(data, separators=(",", ":")))
 
     def _obj(self, path: Path, x: np.ndarray) -> None:
@@ -2003,6 +2076,8 @@ class Reconstruction:
 
 def _look_alike(number: str) -> str:
     """For a proposed glue 'a/b': yes when the two reads differ in one digit or one dropped digit."""
+    if number in FoldSolver.pinned_numbers:
+        return "yes"  # A person confirmed this proposed join; OCR resemblance is irrelevant.
     a, _, b = number.partition("/")
     if "?" in (a, b):
         return ""

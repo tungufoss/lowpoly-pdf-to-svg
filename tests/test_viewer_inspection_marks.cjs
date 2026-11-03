@@ -1,0 +1,10 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');const html=fs.readFileSync('app/fold3d-viewer.html','utf8');
+const node=()=>({attrs:{},children:[],setAttribute(k,v){this.attrs[k]=v;},append(child){this.children.push(child);}});
+const ctx=vm.createContext({SVGNS:'svg',document:{createElementNS:node}});let start=html.indexOf('function inspectionMarks(');vm.runInContext(html.slice(start,html.indexOf('function styleViewerLabels(',start)),ctx);
+const mark={kind:'corner',piece:'a',vertex:0,flat:[1,2],mm:4.9};const model={pieces:{a:{inspection_targets:[mark]},b:{}},faces:[{piece:'a',v:[0,1],flat:[[1,2],[3,4]]},{piece:'b',v:[2,3],flat:[[5,6],[7,8]]}]};
+assert.equal(ctx.inspectionMarks(model,null).length,0);assert.equal(ctx.inspectionMarks(model,{pieces:['a']})[0],mark);
+const edges=ctx.inspectionMarks(model,{glue:{piece:'a',tab_piece:'b',v:[0,1,2,3],gap_mm:2,number:'7'}});assert.equal(edges.length,2);assert.equal(edges[1].vertices[0],2);
+const svg=node();ctx.drawInspectionMarks(svg,[mark,...edges.filter(m=>m.piece==='a')],{x:10,y:20});const children=svg.children[0].children;
+assert.equal(children[0].attrs.cx,'11');assert.equal(children[0].attrs.cy,'22');assert.equal(children[1].textContent,'4.9 mm');assert.equal(children[2].attrs.x1,'11');assert.equal(svg.children[0].attrs['pointer-events'],'none');
+assert.match(html,/this\.setInspection\(issue\)/);assert.match(html,/this\.setInspection\(null\)/);
+console.log('Verified selected issue marks both glue sides, draws exact offset corners and edges with measurements, and supports clearing.');

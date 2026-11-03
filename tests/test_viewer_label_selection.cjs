@@ -1,0 +1,12 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('app/fold3d-viewer.html','utf8');
+const start=html.indexOf('  updateLabelVisibility() {'),end=html.indexOf('  setBackTint(',start);
+const method=vm.runInNewContext('({' + html.slice(start,end).trim() + '})').updateLabelVisibility;
+const labels=[{piece:'a',pdfNumber:'1'},{piece:'b',pdfNumber:'1'},{piece:'b',pdfNumber:'2'},{piece:'c',pdfNumber:'1'},{piece:'b',pdfNumber:null}];
+const groups=[],mesh={userData:{labelRanges:labels.map((label,i)=>({label,start:i*12,count:12}))},geometry:{clearGroups:()=>groups.splice(0),addGroup:(s)=>groups.push(s)}};
+const view={model:{glues:[{piece:'a',tab_piece:'b',number:1}]},labelMode:'cricut',labelMeshes:{cricut:mesh}};
+method.call(view);assert.equal(mesh.visible,false);assert.equal(groups.length,0);
+view.selectedPiece='a';method.call(view);assert.equal(mesh.visible,true);assert.deepEqual(groups,[0,12]);
+view.selectedPiece='c';method.call(view);assert.deepEqual(groups,[36]);
+view.selectedPiece=null;method.call(view);assert.equal(mesh.visible,false);
+console.log('Verified no initial labels, selected-piece labels plus matching neighbor edges only, and selection changes replace the visible set.');

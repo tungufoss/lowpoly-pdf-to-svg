@@ -1,0 +1,17 @@
+const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
+const html=fs.readFileSync('app/fold3d-viewer.html','utf8');
+const calls=[];
+const ctx=new Proxy({}, {get:(o,k)=>o[k] || ((...args)=>calls.push([k,...args])),set:(o,k,v)=>(o[k]=v,true)});
+const canvas={getContext:()=>ctx};
+const sandbox=vm.createContext({document:{createElement:()=>canvas}, THREE:{CanvasTexture:class {constructor(image){this.image=image;}}}});
+const start=html.indexOf('function labelTextureAtlas(');
+vm.runInContext(html.slice(start,html.indexOf('class FoldedView',start)),sandbox);
+sandbox.labelTextureAtlas([{text:'415',cricut:'AB'},{cricut:'□28'},{cricut:'○30'},{cricut:'△A1'}]);
+assert.deepEqual(calls.filter(c=>c[0]==='fillText').map(c=>c[1]), ['415','AB','28','30','A1']);
+assert.equal(calls.filter(c=>c[0]==='ellipse').length,1);
+assert.equal(calls.filter(c=>c[0]==='rect').length,1);
+assert.equal(calls.filter(c=>c[0]==='closePath').length,1);
+assert.match(html,/const height = 5;/);
+assert.match(html,/if \(this\.model\.isTab\(faceIndex\)\) continue;/);
+assert.match(html,/const anchor = \[0, 1\]\.map/);
+console.log('Verified framed digits are drawn inside shapes, both modes use size 5, and 3D mapping excludes tabs and insets anchors.');

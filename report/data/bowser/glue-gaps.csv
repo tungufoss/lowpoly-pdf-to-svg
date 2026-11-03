@@ -1,24 +1,9 @@
 gap_bin,status,n
--1.4,closes,6
--1,closes,148
--0.8,closes,148
--0.8,"proposed by shape only, not glued",1
--0.6,closes,117
--0.6,"proposed by shape only, not glued",1
--0.4,closes,200
--0.4,"proposed by shape only, not glued",2
--0.2,closes,48
-0,closes,32
-0.2,closes,11
-0.4,closes,2
-0.4,does not close,1
-0.4,"proposed by shape only, not glued",1
-0.6,does not close,5
-0.6,let go while building,2
-0.8,does not close,3
-0.8,"proposed by shape only, not glued",1
-1,let go while building,1
-1.2,does not close,1
-1.4,does not close,3
-1.4,let go while building,4
-1.6,let go while building,1
+-1.4,closes,184
+-1,closes,354
+-0.8,closes,107
+-0.6,closes,45
+-0.4,closes,38
+-0.2,closes,14
+0,closes,8
+0.2,closes,4

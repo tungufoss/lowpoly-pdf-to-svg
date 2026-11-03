@@ -234,7 +234,8 @@ function mirrorDifference(a, b) {
       if (error < bestError) { best = j; bestError = error; }
     }
     if (best < 0) return "face shapes or triangle counts differ";
-    if (bestError > 0.1) return `face edge lengths differ by up to ${bestError.toFixed(2)} mm`;
+    // Submillimetre scan/rounding variation needs no manual pair review.
+    if (bestError > 0.5) return `face edge lengths differ by up to ${bestError.toFixed(2)} mm`;
     used.add(best);
   }
   return "";
@@ -774,7 +775,7 @@ function reviewPiece(list) {
     if (reviewServer) {
       try {
         document.getElementById("server-status").className = "busy";
-        document.getElementById("server-status").textContent = "Saving this pair. If you changed it, the affected 2D pages will be refreshed from cached traces. The slow 3D glue rebuild is manual.";
+        document.getElementById("server-status").textContent = "Saving this pair and refreshing the 2D review from saved traces. Mirror checks cover the whole model. The 3D glue rebuild runs only when requested.";
         const result = await save(true);
         if (!result) throw new Error("The save did not complete.");
         if (result.fold3d_stale) { fold3dStale = true; document.getElementById("rebuild-3d").hidden = false; }

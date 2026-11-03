@@ -121,6 +121,9 @@
   <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477, 2T, or 11-02"
     aria-label="Find a glue number, Cricut label, or piece" title="A Cricut label or glue number finds its paired pieces; a piece id shows that piece and its twin"></form>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
+  <label>Issues <select id="inspection-list" aria-label="Needs inspection" style="max-width:38em"><option value="">Choose an issue…</option></select></label>
+  <label><input id="show-confirmed" type="checkbox">Show confirmed</label>
+  <span id="inspection-legend" style="font-size:0.85em"><span style="color:#ff8585">● Error: confirmed conflict</span> · <span style="color:#ffd166">● Needs checking: uncertain</span> · <span style="color:#8bdd9b">● Confirmed: accepted</span> · Blue marks show the affected geometry</span>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
   <label>3D numbers <select id="number-label-view" aria-label="3D number labels">
     <option value="glue">Inside markers (Labels switch)</option><option value="cricut">Cricut labels on the faces</option><option value="ocr">OCR numbers on the faces</option>
@@ -360,13 +363,205 @@ function pieceFlatOffset(group, faces) {
   return {x: median(matches.map(match => match[0])), y: median(matches.map(match => match[1]))};
 }
 
-// Labels for the 3D faces. With the Cricut export, its labels and piece numbers are placed where
-// and as big as the pen draws them (5 mm / 10 mm), not at the PDF number's 2 mm.
-function readPrintLabels(svgText, cricutRows, model, exportText) {
+function inspectionMatchesMaterial(issue, material, pieces) {
+  return !material || issue.pieces.some(piece => pieces[piece]?.material === material);
+}
+
+function buildInspectionIssues(model, edgeRows, labels, mode) {
+  const issues = [], short = p => p.replace(/^piece-/, "");
+  const names = (number, piece) => [...new Set(labels.filter(r => String(r.pdf_number) === String(number) && (r.pieces || "").split(/\s+/).includes(piece)).map(r => r.label))];
+  const format = (number, piece) => mode === "cricut" ? names(number, piece).join("/") || `PDF ${number}` : String(number);
+  for (const g of model.glues) {
+    const pieces = [...new Set([g.piece,g.tab_piece])], a = names(g.number,g.piece), b = names(g.number,g.tab_piece);
+    const conflict = a.length && b.length && a.join("|") !== b.join("|");
+    if (!conflict && !model.isOpen(g)) {
+      if (g.confirmed) issues.push({pieces,glue:g,severity:"confirmed",label:`${format(g.number,g.piece)} · ${pieces.map(short).join(" ↔ ")} · confirmed join closes`,reason:`Confirmed join ${format(g.number,g.piece)} closes; simulated gap ${g.gap_mm} mm`});
+      continue;
+    }
+    const severity = conflict || (g.confirmed && !g.status.startsWith("proposed")) ? "error" : "warning";
+    const detail = conflict ? `labels disagree: ${format(g.number,g.piece)} ↔ ${format(g.number,g.tab_piece)}` : `${g.status}; simulated gap ${g.gap_mm} mm`;
+    issues.push({pieces,glue:g,severity,label:`${format(g.number,g.piece)} · ${pieces.map(short).join(" ↔ ")} · ${detail}`,reason:detail});
+  }
+  const seen = new Set();
+  for (const row of edgeRows) {
+    if (row.status === "ok") continue;
+    const pieces = [...new Set([row.piece,row.partner_piece].filter(p => p && model.pieces[p]))];
+    if (!pieces.length) continue;
+    const key = `${row.number}|${[...pieces].sort().join("|")}`;
+    if (seen.has(key)) continue; seen.add(key);
+    const edgeGroup = edgeRows.filter(r => String(r.number) === String(row.number) && pieces.includes(r.piece));
+    const detail = row.status === "length mismatch" ? `source edge lengths ${row.length_mm} vs ${row.partner_length_mm} mm; tracing or label needs checking` : `${row.status}; source annotation needs checking`;
+    const accepted = edgeGroup.every(r=>r.accepted);
+    issues.push({pieces,edgeRows:edgeGroup,severity:accepted?"confirmed":"warning",label:`${format(row.number,row.piece)} · ${pieces.map(short).join(" ↔ ")} · ${accepted?"reviewed and accepted":detail}`,reason:accepted?`Accepted source check: ${detail}`:detail});
+  }
+  for (const [piece,data] of Object.entries(model.pieces)) {
+    if (data.inspect) issues.push({pieces:[piece,data.twin].filter(p=>p && model.pieces[p]),severity:"warning",label:`${short(piece)} · ${data.inspect}`,reason:`${piece}: ${data.inspect}`});
+    if (data.accepted_inspection) issues.push({pieces:[piece],severity:"confirmed",label:`${short(piece)} · reviewed and accepted`,reason:`${piece}: accepted — ${data.accepted_inspection}`});
+  }
+  return issues;
+}
+
+// Ear clipping keeps renderer triangles inside concave paper faces.
+function inspectionMarks(model, issue) {
+  if (!issue) return [];
+  if (issue.edgeRows) return issue.edgeRows.filter(r=>r.flat?.length===2).map(r=> {
+    const candidates = model.faces.filter(f=>f.piece===r.piece).flatMap(f=>f.v.map((v,i)=>({v,p:f.flat[i]})));
+    const vertices = r.flat.map(p=>candidates.reduce((best,c)=>!best || Math.hypot(c.p[0]-p[0],c.p[1]-p[1]) < Math.hypot(best.p[0]-p[0],best.p[1]-p[1]) ? c : best,null)?.v);
+    return {kind:"edge",piece:r.piece,flat:r.flat,vertices,number:r.number};
+  }).filter(mark=>mark.vertices.every(v=>v!==undefined));
+  if (!issue.glue) return issue.pieces.flatMap(piece => model.pieces[piece]?.inspection_targets || []);
+  const g = issue.glue, marks = [];
+  for (const [piece, vertices] of [[g.piece,g.v.slice(0,2)],[g.tab_piece,g.v.slice(2)]]) {
+    const flat = vertices.map(vertex => {
+      const face = model.faces.find(f => f.piece === piece && f.v.includes(vertex));
+      return face?.flat[face.v.indexOf(vertex)];
+    });
+    if (flat.every(Boolean)) marks.push({kind:"edge",piece,vertices,flat,mm:g.gap_mm,number:String(g.number)});
+  }
+  return marks;
+}
+function drawInspectionMarks(svg, marks, offset) {
+  const group = document.createElementNS(SVGNS,"g"); group.setAttribute("class","inspection-marks");
+  group.setAttribute("pointer-events","none");
+  const add = (type, attrs, text) => {
+    const node = document.createElementNS(SVGNS,type);
+    for (const [key,value] of Object.entries(attrs)) node.setAttribute(key,String(value));
+    if (text) node.textContent = text;
+    group.append(node); return node;
+  };
+  for (const mark of marks) {
+    if (mark.kind === "corner") {
+      const x=mark.flat[0]+offset.x, y=mark.flat[1]+offset.y;
+      add("circle",{cx:x,cy:y,r:2,fill:"#2196ff","fill-opacity":0.15,stroke:"#087df5","stroke-width":0.8});
+      add("text",{x:x,y:y-3,"text-anchor":"middle","font-size":3.5,"font-family":"Arial, sans-serif","font-weight":"bold",fill:"#087df5",stroke:"white","stroke-width":0.7,"paint-order":"stroke"},mark.mm.toFixed(1)+" mm");
+    } else {
+      const [a,b]=mark.flat;
+      add("line",{x1:a[0]+offset.x,y1:a[1]+offset.y,x2:b[0]+offset.x,y2:b[1]+offset.y,stroke:"#087df5","stroke-width":1.2,"stroke-linecap":"round"});
+    }
+  }
+  svg.append(group);
+}
+
+function styleViewerLabels(group) {
+  for (const text of group.querySelectorAll("text")) {
+    if (!text.hasAttribute("data-piece-number")) {
+      text.setAttribute("font-size", "5");
+      text.style.fontSize = "5px";
+    }
+    text.setAttribute("font-family", "Arial, sans-serif");
+    text.setAttribute("font-weight", "bold");
+  }
+}
+
+function faceTriangles(face) {
+  const p = face.flat, remaining = p.map((_, i) => i), result = [];
+  const cross = (a, b, c) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
+  const area = p.reduce((sum, a, i) => { const b = p[(i+1)%p.length]; return sum+a[0]*b[1]-a[1]*b[0]; }, 0);
+  const sign = area >= 0 ? 1 : -1, eps = 1e-8;
+  while (remaining.length > 3) {
+    let clipped = false;
+    for (let k = 0; k < remaining.length; k++) {
+      const a = remaining[(k+remaining.length-1)%remaining.length], b = remaining[k], c = remaining[(k+1)%remaining.length];
+      if (sign*cross(p[a],p[b],p[c]) <= eps) continue;
+      const contains = remaining.some(i => i!==a && i!==b && i!==c &&
+        sign*cross(p[a],p[b],p[i]) >= -eps && sign*cross(p[b],p[c],p[i]) >= -eps && sign*cross(p[c],p[a],p[i]) >= -eps);
+      if (contains) continue;
+      result.push([a,b,c]); remaining.splice(k,1); clipped = true; break;
+    }
+    if (!clipped) {
+      const collinear = remaining.findIndex((b,k) => Math.abs(cross(p[remaining[(k+remaining.length-1)%remaining.length]],p[b],p[remaining[(k+1)%remaining.length]])) <= eps);
+      if (collinear < 0) throw new Error("Cannot triangulate face " + face.id);
+      remaining.splice(collinear,1);
+    }
+  }
+  if (remaining.length === 3) result.push([...remaining]);
+  return result;
+}
+
+function faceOutlineEdges(faces) {
+  const edges = new Map();
+  for (const face of faces) face.v.forEach((a, i) => {
+    const b = face.v[(i + 1) % face.v.length];
+    edges.set(`${Math.min(a, b)}:${Math.max(a, b)}`, [Math.min(a, b), Math.max(a, b)]);
+  });
+  return [...edges.values()];
+}
+
+function pieceBoundaryEdges(faces) {
+  const edges = new Map();
+  for (const face of faces) face.v.forEach((a, i) => {
+    const b = face.v[(i + 1) % face.v.length];
+    const key = `${face.piece}|${Math.min(a, b)}:${Math.max(a, b)}`;
+    const entry = edges.get(key) || {face, a, b, count: 0};
+    entry.count++; edges.set(key, entry);
+  });
+  return [...edges.values()].filter(edge => edge.count === 1);
+}
+
+// Pull Bowser's world-up direction back into the flat paper coordinates.
+function pieceUprightAngle(flat, world) {
+  const dx1 = flat[1][0] - flat[0][0], dy1 = flat[1][1] - flat[0][1];
+  const dx2 = flat[2][0] - flat[0][0], dy2 = flat[2][1] - flat[0][1];
+  const det = dx1 * dy2 - dx2 * dy1;
+  if (Math.abs(det) < 1e-9) return null;
+  const y1 = world[1][1] - world[0][1], y2 = world[2][1] - world[0][1];
+  const gx = (y1 * dy2 - y2 * dy1) / det, gy = (dx1 * y2 - dx2 * y1) / det;
+  if (Math.hypot(gx, gy) < 1e-6) return null;
+  return Math.atan2(gx, -gy) * 180 / Math.PI;
+}
+function uprightCropRotation(model, faces, selectedFace) {
+  const candidates = [];
+  for (const index of faces) {
+    if (model.isTab(index)) continue;
+    const face = model.faces[index];
+    for (let k = 1; k + 1 < face.v.length; k++) {
+      const ids = [0, k, k + 1], flat = ids.map(i => face.flat[i]);
+      const area = Math.abs((flat[1][0] - flat[0][0]) * (flat[2][1] - flat[0][1]) -
+        (flat[2][0] - flat[0][0]) * (flat[1][1] - flat[0][1]));
+      const angle = pieceUprightAngle(flat, ids.map(i => model.vertices[face.v[i]]));
+      if (angle !== null) candidates.push({angle, area, selected: index === selectedFace});
+    }
+  }
+  candidates.sort((a, b) => Number(b.selected) - Number(a.selected) || b.area - a.area);
+  return candidates.length ? -candidates[0].angle : 0;
+}
+function rotatedCropBounds(view, angle) {
+  const [x, y, w, h] = view, cx = x + w / 2, cy = y + h / 2;
+  const radians = angle * Math.PI / 180, c = Math.abs(Math.cos(radians)), s = Math.abs(Math.sin(radians));
+  const width = w * c + h * s, height = w * s + h * c;
+  return [cx - width / 2, cy - height / 2, width, height];
+}
+
+function orientPieceIdentifiers(exportText, model) {
+  if (!exportText) return exportText;
+  const doc = new DOMParser().parseFromString(exportText, "image/svg+xml");
+  for (const group of doc.querySelectorAll('g[id^="piece-"][data-material]')) {
+    const faces = model.faces.filter((face, i) => face.piece === group.id && !model.isTab(i));
+    const offset = pieceFlatOffset(group, faces);
+    for (const text of group.querySelectorAll('text[data-piece-number]')) {
+      const x = Number(text.getAttribute("x")), y = Number(text.getAttribute("y"));
+      const candidates = [];
+      for (const face of faces) for (const ids of faceTriangles(face)) {
+        const flat = ids.map(i => face.flat[i]);
+        const bary = flatBarycentric([x + offset.x, y + offset.y], ...flat);
+        if (!bary) continue;
+        const angle = pieceUprightAngle(flat, ids.map(i => model.vertices[face.v[i]]));
+        if (angle !== null) candidates.push({angle, distance: bary.reduce((sum, v) => sum + Math.max(0, -v), 0)});
+      }
+      candidates.sort((a, b) => a.distance - b.distance);
+      if (!candidates.length) continue;
+      const transform = "rotate(" + candidates[0].angle.toFixed(3) + " " + x + " " + y + ")";
+      text.setAttribute("transform", transform);
+      for (const path of group.querySelectorAll('path[data-piece-number]'))
+        if (path.getAttribute("data-piece-number") === text.getAttribute("data-piece-number")) path.setAttribute("transform", "rotate(" + (candidates[0].angle - Number(path.getAttribute("data-frame-angle") || 0)) + " " + x + " " + y + ")");
+    }
+  }
+  return new XMLSerializer().serializeToString(doc);
+}
+
+function readPrintLabels(svgText, cricutRows, model, exportText = "") {
   const cricut = new Map();
-  const exportDoc = exportText && new DOMParser().parseFromString(exportText, "image/svg+xml");
-  const fromExport = exportDoc && !exportDoc.querySelector("parsererror") && exportDoc.querySelector("text[data-label]");
-  if (!fromExport) for (const row of cricutRows) for (const piece of (row.pieces || "").split(/\s+/).filter(Boolean))
+  for (const row of cricutRows) for (const piece of (row.pieces || "").split(/\s+/).filter(Boolean))
     cricut.set(`${piece}|${row.pdf_number}`, row.label);
   const doc = new DOMParser().parseFromString(svgText, "image/svg+xml"), labels = [];
   for (const group of doc.querySelectorAll('g[id^="piece-"][data-material]')) {
@@ -379,16 +574,24 @@ function readPrintLabels(svgText, cricutRows, model, exportText) {
       if (!text || !Number.isFinite(x) || !Number.isFinite(y)) continue;
       const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
       const size = Number(node.getAttribute("font-size")) || 2;
-      labels.push({piece, text, cricut: /^\d+$/.test(text) ? (cricut.get(`${piece}|${text}`) || "") : "",
+      labels.push({piece, pdfNumber: text, text, cricut: !exportText && /^\d+$/.test(text) ? (cricut.get(`${piece}|${text}`) || "") : "",
         x: x + offset.x, y: y + offset.y, angle: THREE.MathUtils.degToRad(angle), size});
     }
-    if (!fromExport) continue;
-    for (const node of exportDoc.querySelectorAll(`g[data-piece="${CSS.escape(piece)}"] text[data-label]`)) {
-      const x = Number(node.getAttribute("x")), y = Number(node.getAttribute("y"));
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
-      const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
-      labels.push({piece, text: "", cricut: node.textContent.trim(), x: x + offset.x, y: y + offset.y,
-        angle: THREE.MathUtils.degToRad(angle), size: Number(node.getAttribute("font-size")) || 5});
+  }
+  if (exportText) {
+    const exported = new DOMParser().parseFromString(exportText, "image/svg+xml");
+    for (const group of exported.querySelectorAll('g[id^="piece-"][data-material]')) {
+      const piece = group.id, offset = pieceFlatOffset(group, model.faces.filter(face => face.piece === piece));
+      for (const node of group.querySelectorAll('text[data-label]')) {
+        const x = Number(node.getAttribute("x")), y = Number(node.getAttribute("y"));
+        const frame = node.hasAttribute("data-piece-number")
+          ? node.parentNode.querySelector('path[data-mark="circle"], path[data-mark="square"], path[data-mark="triangle"]')?.getAttribute("data-mark") : "";
+        const mark = {circle: "○", square: "□", triangle: "△"}[frame] || "";
+        const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
+        labels.push({piece, pdfNumber: node.getAttribute("data-pdf-number"), text: "", cricut: mark + node.textContent.trim(),
+          x: x + offset.x, y: y + offset.y, angle: THREE.MathUtils.degToRad(angle),
+          size: Number(node.getAttribute("font-size")) || 2});
+      }
     }
   }
   return labels;
@@ -414,7 +617,21 @@ function labelTextureAtlas(labels) {
   strings.forEach((text, i) => {
     const column = i % columns, row = Math.floor(i / columns), x = (column + 0.5) * cellWidth, y = (row + 0.5) * cellHeight;
     context.lineJoin = "round"; context.lineWidth = 5; context.strokeStyle = "white"; context.fillStyle = "#171717";
-    context.strokeText(text, x, y, cellWidth - 8); context.fillText(text, x, y, cellWidth - 8);
+    const frame = {"○": "circle", "□": "square", "△": "triangle"}[text[0]];
+    const digits = frame ? text.slice(1) : text;
+    if (frame) {
+      context.beginPath();
+      if (frame === "circle") context.ellipse(x, y, 27, 21, 0, 0, Math.PI * 2);
+      else if (frame === "square") context.rect(x - 28, y - 21, 56, 42);
+      else { context.moveTo(x, y - 22); context.lineTo(x + 37, y + 21); context.lineTo(x - 37, y + 21); context.closePath(); }
+      context.lineWidth = 5; context.strokeStyle = "white"; context.stroke();
+      context.lineWidth = 2; context.strokeStyle = "#171717"; context.stroke();
+    }
+    context.lineWidth = 4; context.strokeStyle = "white";
+    context.font = frame ? "bold 25px Arial, sans-serif" : "bold 32px Arial, sans-serif";
+    const textY = y + (frame === "triangle" ? 6 : 0);
+    context.strokeText(digits, x, textY, frame ? 45 : cellWidth - 8);
+    context.fillText(digits, x, textY, frame ? 45 : cellWidth - 8);
     slots.set(text, {column, row});
   });
   const texture = new THREE.CanvasTexture(canvas);
@@ -456,8 +673,8 @@ class FoldedView {
     this.materialNames = materials;
     this.materialIndex = new Map(materials.map((name, i) => [name, i]));
     faces.forEach((f, i) => {
-      for (let k = 1; k + 1 < f.v.length; k++) {
-        for (const v of [f.v[0], f.v[k], f.v[k + 1]]) pos.push(...V[v]);
+      for (const ids of faceTriangles(f)) {
+        for (const i of ids) pos.push(...V[f.v[i]]);
         this.triFace.push(i);
       }
     });
@@ -493,10 +710,46 @@ class FoldedView {
     this.inner = new THREE.Mesh(innerGeo, this.innerMaterials);
     this.scene.add(this.mesh, this.inner);
     this.buildNumbers(V);
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 1),
+    // Draw saved polygon edges, never the diagonals used to triangulate a face.
+    const edgeGeo = new THREE.BufferGeometry();
+    edgeGeo.setAttribute("position", new THREE.Float32BufferAttribute(
+      faceOutlineEdges(faces).flatMap(([a, b]) => [...V[a], ...V[b]]), 3));
+    const edges = new THREE.LineSegments(edgeGeo,
       new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
     this.edges = edges; this.scene.add(edges);
+    this.buildInsideCuts(innerSide, printedInside ? 1 : -1);
     this.paint(null, null);
+  }
+  buildInsideCuts(side, insideSign) {
+    // Mesh ribbons have reliable thickness in WebGL, unlike lineWidth. Only piece boundaries
+    // are bold; edges shared by faces of the same paper piece remain light fold lines.
+    this.insideCuts = new THREE.Group();
+    const byMaterial = new Map();
+    for (const {face, a, b} of pieceBoundaryEdges(this.model.faces)) {
+      const points = face.v.map(v => new THREE.Vector3(...this.model.vertices[v]));
+      const normal = new THREE.Vector3();
+      for (let k = 1; k + 1 < points.length; k++) {
+        normal.crossVectors(points[k].clone().sub(points[0]), points[k + 1].clone().sub(points[0]));
+        if (normal.lengthSq() > 1e-8) break;
+      }
+      if (normal.lengthSq() < 1e-8) continue;
+      normal.normalize();
+      const start = new THREE.Vector3(...this.model.vertices[a]).addScaledVector(normal, insideSign * 0.06);
+      const end = new THREE.Vector3(...this.model.vertices[b]).addScaledVector(normal, insideSign * 0.06);
+      const across = normal.clone().cross(end.clone().sub(start)).normalize().multiplyScalar(0.3);
+      const corners = [start.clone().sub(across), end.clone().sub(across), end.clone().add(across), start.clone().add(across)];
+      const material = this.model.pieces[face.piece].material;
+      if (!byMaterial.has(material)) byMaterial.set(material, []);
+      for (const i of [0, 1, 2, 0, 2, 3]) byMaterial.get(material).push(...corners[i].toArray());
+    }
+    for (const [material, positions] of byMaterial) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({color: 0x000000, side,
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1}));
+      mesh.userData.material = material; this.insideCuts.add(mesh);
+    }
+    this.scene.add(this.insideCuts);
   }
   // Glue numbers written on the inside of the pieces: seen only from inside, through gaps.
   buildNumbers(V) {
@@ -562,7 +815,7 @@ class FoldedView {
     this.labelMeshes = {ocr: null, cricut: null};
     if (!this.labelAtlas) return;
     for (const mode of ["ocr", "cricut"]) {
-      const positions = [], uvs = [], indices = [];
+      const positions = [], uvs = [], indices = [], labelRanges = [];
       for (const label of this.labels) {
         const text = mode === "ocr" ? (/^\d+$/.test(label.text) ? label.text : "") : label.cricut;
         const slot = this.labelAtlas.slots.get(text);
@@ -570,15 +823,16 @@ class FoldedView {
         const mapped = this.mapLabel(label);
         if (!mapped) continue;
         const {point, xAxis, normal, worldAt} = mapped;
-        const pageDown = worldAt([label.x, label.y + 1]).sub(point).normalize();
+        const pageDown = worldAt([label.x - Math.sin(label.angle), label.y + Math.cos(label.angle)]).sub(point).normalize();
         const yAxis = normal.clone().cross(xAxis).normalize();
         if (yAxis.dot(pageDown) > 0) yAxis.negate();
-        const height = Math.max(label.size, 1.2);
-        const width = Math.max(height * 0.55, Math.min(height * text.length * 0.62, height * 2.6));
+        const height = 5; // Both numbering systems use the Cricut display size.
+        const width = height * 2; // Match the atlas aspect ratio so frames remain intact.
         const u0 = (slot.column * this.labelAtlas.cellWidth + 5) / this.labelAtlas.texture.image.width;
         const u1 = ((slot.column + 1) * this.labelAtlas.cellWidth - 5) / this.labelAtlas.texture.image.width;
         const vTop = 1 - (slot.row * this.labelAtlas.cellHeight + 3) / this.labelAtlas.texture.image.height;
         const vBottom = 1 - ((slot.row + 1) * this.labelAtlas.cellHeight - 3) / this.labelAtlas.texture.image.height;
+        const rangeStart = indices.length;
         for (const [side, flip] of [[1, false], [-1, true]]) {
           const center = point.clone().addScaledVector(normal, side * 0.08);
           const hx = xAxis.clone().multiplyScalar(width / 2), hy = yAxis.clone().multiplyScalar(height / 2);
@@ -590,24 +844,27 @@ class FoldedView {
           uvs.push(left, vBottom, right, vBottom, right, vTop, left, vTop);
           indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
         }
+        labelRanges.push({label, start: rangeStart, count: indices.length - rangeStart});
       }
       if (!positions.length) continue;
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
       geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
       geometry.setIndex(indices); geometry.computeBoundingSphere();
-      const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({map: this.labelAtlas.texture,
+      const mesh = new THREE.Mesh(geometry, [new THREE.MeshBasicMaterial({map: this.labelAtlas.texture,
         transparent: true, alphaTest: 0.04, side: THREE.DoubleSide, depthWrite: false,
-        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1}));
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1})]);
+      mesh.userData.labelRanges = labelRanges;
       mesh.visible = false; this.scene.add(mesh); this.labelMeshes[mode] = mesh;
     }
   }
   mapLabel(label) {
     const candidates = [];
-    for (const face of this.model.faces) {
+    for (const [faceIndex, face] of this.model.faces.entries()) {
+      if (this.model.isTab(faceIndex)) continue;
       if (face.piece !== label.piece || !face.flat || face.flat.length !== face.v.length) continue;
-      for (let k = 1; k + 1 < face.v.length; k++) {
-        const ids = [0, k, k + 1], flat = ids.map(i => face.flat[i]);
+      for (const ids of faceTriangles(face)) {  // real triangles, so concave faces never map into a notch
+        const flat = ids.map(i => face.flat[i]);
         const bary = flatBarycentric([label.x, label.y], ...flat);
         if (!bary) continue;
         const outside = bary.reduce((sum, v) => sum + Math.max(0, -v), 0);
@@ -616,20 +873,82 @@ class FoldedView {
     }
     candidates.sort((a, b) => a.outside - b.outside);
     const best = candidates[0];
-    if (!best || best.outside > 0.7) return null;
+    if (!best) return null;
     const map = p => {
       const b = flatBarycentric(p, ...best.flat);
       return best.world[0].clone().multiplyScalar(b[0]).addScaledVector(best.world[1], b[1]).addScaledVector(best.world[2], b[2]);
     };
-    const point = map([label.x, label.y]);
-    const anglePoint = map([label.x + Math.cos(label.angle), label.y + Math.sin(label.angle)]);
+    // Tab annotations are inset onto the closest body triangle, never left floating on tabs.
+    const weights = flatBarycentric([label.x, label.y], ...best.flat).map(v => Math.max(0.12, v));
+    const total = weights.reduce((a, b) => a + b, 0);
+    const anchor = [0, 1].map(axis => weights.reduce((sum, v, i) => sum + v / total * best.flat[i][axis], 0));
+    const point = map(anchor);
+    const anglePoint = map([anchor[0] + Math.cos(label.angle), anchor[1] + Math.sin(label.angle)]);
     const xAxis = anglePoint.sub(point).normalize();
     const normal = best.world[1].clone().sub(best.world[0]).cross(best.world[2].clone().sub(best.world[0])).normalize();
-    return {point, xAxis, normal, worldAt: p => map(p)};
+    return {point, xAxis, normal, worldAt: p => map([anchor[0] + p[0] - label.x, anchor[1] + p[1] - label.y])};
+  }
+  showInspection(marks) {
+    if (this.inspectionGroup) {
+      this.scene.remove(this.inspectionGroup);
+      this.inspectionGroup.traverse(node => {
+        node.geometry?.dispose(); node.material?.map?.dispose(); node.material?.dispose();
+      });
+    }
+    this.inspectionGroup = new THREE.Group();
+    for (const mark of marks) {
+      if (mark.kind === "corner") {
+        const canvas=document.createElement("canvas"); canvas.width=256;canvas.height=96;
+        const ctx=canvas.getContext("2d"); ctx.beginPath();ctx.arc(128,48,15,0,Math.PI*2);
+        ctx.lineWidth=9;ctx.strokeStyle="white";ctx.stroke();ctx.lineWidth=5;ctx.strokeStyle="#087df5";ctx.stroke();
+        ctx.font="bold 23px Arial";ctx.textAlign="center";ctx.lineWidth=5;ctx.strokeStyle="white";
+        ctx.strokeText(mark.mm.toFixed(1)+" mm",128,22);ctx.fillStyle="#087df5";ctx.fillText(mark.mm.toFixed(1)+" mm",128,22);
+        const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(canvas),depthTest:false,depthWrite:false}));
+        sprite.position.set(...this.model.vertices[mark.vertex]);sprite.scale.set(24,9,1);sprite.renderOrder=20;
+        this.inspectionGroup.add(sprite);
+      } else {
+        const [a,b]=mark.vertices.map(v=>new THREE.Vector3(...this.model.vertices[v]));
+        const direction=b.clone().sub(a),length=direction.length();if(length<1e-6)continue;
+        const mesh=new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,length,8),new THREE.MeshBasicMaterial({color:0x087df5,depthTest:false,depthWrite:false}));
+        mesh.position.copy(a).add(b).multiplyScalar(0.5);mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),direction.normalize());mesh.renderOrder=19;
+        this.inspectionGroup.add(mesh);
+      }
+    }
+    this.scene.add(this.inspectionGroup);
   }
   setLabelMode(mode) {
-    for (const [key, mesh] of Object.entries(this.labelMeshes)) if (mesh) mesh.visible = key === mode;
-    this.numbers.visible = mode === "glue";
+    this.labelMode = mode;
+    this.updateLabelVisibility();
+  }
+  updateLabelVisibility() {
+    const selected = this.selectedPiece;
+    const matches = new Map();
+    for (const glue of this.model.glues) {
+      if (![glue.piece, glue.tab_piece].includes(selected)) continue;
+      const other = glue.piece === selected ? glue.tab_piece : glue.piece;
+      if (!matches.has(other)) matches.set(other, new Set());
+      matches.get(other).add(String(glue.number));
+    }
+    const visible = label => !!selected && (label.piece === selected ||
+      matches.get(label.piece)?.has(String(label.pdfNumber)));
+    for (const [mode, mesh] of Object.entries(this.labelMeshes || {})) if (mesh) {
+      mesh.geometry.clearGroups();
+      let count = 0;
+      for (const range of mesh.userData.labelRanges) if (visible(range.label)) {
+        mesh.geometry.addGroup(range.start, range.count, 0); count++;
+      }
+      mesh.visible = mode === this.labelMode && count > 0;
+    }
+    if (this.numbers) {
+      this.numbers.visible = this.labelMode === "glue" && !!selected;
+      for (const sprite of this.numbers.children) {
+        const {piece, glue} = sprite.userData;
+        const material = this.material;
+        const shown = !material || this.onlyMaterial(sprite.userData.materials, material);
+        sprite.visible = shown && (piece ? piece === selected && !!this.cricut :
+          !!selected && [glue.piece, glue.tab_piece].includes(selected));
+      }
+    }
   }
   setBackTint(strength) { this.backTint = Math.max(0, Math.min(100, Number(strength) || 0)); this.paint(this.selectedPiece, this.selectedFace); }
   buildLines() {
@@ -694,6 +1013,7 @@ class FoldedView {
       }
     });
     c.needsUpdate = true; ci.needsUpdate = true;
+    this.updateLabelVisibility();
   }
   // The nearest face the ray meets among the cardstocks shown (hidden ones cannot be clicked).
   visibleHit(ray) {
@@ -735,7 +1055,9 @@ class FoldedView {
       sprite.visible = (!sprite.userData.piece || !!this.cricut) && (!material || this.onlyMaterial(sprite.userData.materials, material));
     });
     this.edges.visible = !material;
+    this.insideCuts.children.forEach(mesh => { mesh.visible = !material || mesh.userData.material === material; });
     this.updateDiagnosticLines();
+    this.updateLabelVisibility();
     this.fit();
   }
   listen(el) {
@@ -796,9 +1118,14 @@ class FoldedView {
     if (pan) this.pan(...action);
     else this.turn(({ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down"})[e.key]);
   }
-  focus(face) {
+  focus(face, onlyIfOffCenter = false) {
     const p = this.model.faces[face].v.map(v => new THREE.Vector3(...this.model.vertices[v]));
     const centre = p.reduce((a, b) => a.add(b), new THREE.Vector3()).divideScalar(p.length);
+    if (onlyIfOffCenter) {
+      const screen = centre.clone().project(this.camera);
+      // Leave the central 40% of the pane alone; pan only for an off-centre selection.
+      if (Math.abs(screen.x) <= 0.4 && Math.abs(screen.y) <= 0.4) return;
+    }
     this.camera.position.add(centre.clone().sub(this.controls.target));
     this.controls.target.copy(centre); this.controls.update();
   }
@@ -977,6 +1304,7 @@ class PatternView {
     for (const group of this.pieceGroups) {
       const draw = group.querySelector('g[data-operation="draw"]');
       if (!draw) continue;
+      styleViewerLabels(draw);
       if (exportDoc && !group.querySelector(".cricut-labels")) {
         const source = exportDoc.querySelector(`g[id="${CSS.escape(group.id)}"] g[data-operation="draw"]`);
         if (source) {
@@ -990,6 +1318,7 @@ class PatternView {
         }
       }
       const copy = group.querySelector(".cricut-labels");
+      if (copy) styleViewerLabels(copy);
       draw.style.display = exportDoc && copy ? "none" : "";
       if (copy) copy.style.display = exportDoc ? "" : "none";
     }
@@ -1055,7 +1384,7 @@ class PatternView {
       const xs = faces.flatMap(i => this.model.faces[i].flat.map(p => p[0] + o.x)), ys = faces.flatMap(i => this.model.faces[i].flat.map(p => p[1] + o.y));
       if (!xs.length) continue;
       const x0 = Math.min(...xs), y0 = Math.min(...ys), w = Math.max(...xs) - x0, h = Math.max(...ys) - y0;
-      const pad = 0.06 * Math.max(w, h, 10), view = [x0 - pad, y0 - pad, w + 2 * pad, h + 2 * pad];
+      const pad = Math.max(0.06 * Math.max(w, h, 10), (this.inspectionTargets || []).some(mark => mark.piece === piece) ? 8 : 0), view = [x0 - pad, y0 - pad, w + 2 * pad, h + 2 * pad];
       const svg = document.createElementNS(SVGNS, "svg");
       svg.setAttribute("viewBox", view.join(" ")); svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
       const clip = document.createElementNS(SVGNS, "clipPath"), rect = document.createElementNS(SVGNS, "rect");
@@ -1071,9 +1400,13 @@ class PatternView {
       }
       svg.append(scans);
       const group = this.svg.querySelector(`g[id="${CSS.escape(piece)}"]`);
+      let cropLabels;
       if (group) {
         const copy = group.cloneNode(true); copy.style.display = "";
         copy.removeAttribute("id"); copy.querySelectorAll("[id]").forEach(n => n.removeAttribute("id"));
+        cropLabels = copy.querySelector('.cricut-labels:not([style*="display: none"])') ||
+          copy.querySelector('g[data-operation="draw"]');
+        cropLabels?.remove();
         // the whole outline white underneath, so tabs read white like on the cardstock
         copy.querySelectorAll('g[data-operation="cut"] path, g[data-operation="cut"] polygon').forEach(n => {
           n.classList.add("crop-outline"); n.style.fill = "#ffffff";
@@ -1083,6 +1416,8 @@ class PatternView {
       for (const i of faces) {
         const p = this.polys[i].cloneNode(); p.style.display = ""; svg.append(p); this.cropPolys.push(p);
       }
+      if (cropLabels) svg.append(cropLabels);
+      drawInspectionMarks(svg, (this.inspectionTargets || []).filter(mark => mark.piece === piece), o);
       if (glue) {
         const ends = glue.piece === piece ? [glue.v[0], glue.v[1]] : [glue.v[2], glue.v[3]];
         const [a, b] = ends.map(v => flatOf(piece, v));
@@ -1094,6 +1429,13 @@ class PatternView {
           svg.append(line);
         }
       }
+      // Rotate the entire cut-out, including scan, folds, labels and click targets.
+      const angle = uprightCropRotation(this.model, faces, this.selectedFace);
+      const content = document.createElementNS(SVGNS, "g");
+      content.setAttribute("transform", "rotate(" + angle + " " + (view[0] + view[2] / 2) + " " + (view[1] + view[3] / 2) + ")");
+      while (svg.firstChild) content.append(svg.firstChild);
+      svg.append(content);
+      svg.setAttribute("viewBox", rotatedCropBounds(view, angle).join(" "));
       const figure = document.createElement("figure"), caption = document.createElement("figcaption");
       const role = glue ? (glue.piece === glue.tab_piece ? " (edge and tab)" : piece === glue.piece ? " (edge)" : " (tab)") : "";
       caption.textContent = `${piece}${role} · ${this.model.pieces[piece]?.material || ""}`;
@@ -1168,8 +1510,9 @@ class PatternView {
 }
 
 class Viewer {
-  constructor(model, svgText, exportText, labels, cricutRows) {
+  constructor(model, svgText, exportText, labels, cricutRows, edgeRows = [], edgeChecksAvailable = true) {
     this.model = model;
+    this.edgeRows = edgeRows; this.edgeChecksAvailable = edgeChecksAvailable;
     this.cricutRows = cricutRows;
     const pick = (face, from) => this.select(face, from);
     const contextMenu = (face, x, y) => this.showFaceMenu(face, x, y);
@@ -1311,6 +1654,7 @@ class Viewer {
     });
     this.setupPairWalk();
     this.setupFind();
+    this.setupInspection();
     this.setupLabels(exportText);
   }
   // PDF numbers or Cricut labels, on the pattern and in 3D. Cricut labels need the export SVG.
@@ -1332,6 +1676,9 @@ class Viewer {
     const apply = mode => {
       this.pattern.setLabels(mode === "cricut" ? doc : null);
       this.folded.setLabels(mode === "cricut" ? labels : null);
+      const numberMode = document.getElementById("number-label-view");
+      numberMode.value = mode === "cricut" ? "cricut" : "ocr";
+      this.folded.setLabelMode(numberMode.value);
       try { localStorage.setItem(key, mode); } catch (e) {}
     };
     try { select.value = localStorage.getItem(key) === "cricut" ? "cricut" : "pdf"; } catch (e) {}
@@ -1384,6 +1731,66 @@ class Viewer {
       if (bar.hidden || !this.editor.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
       const step = {n: 1, N: 1, PageDown: 1, b: -1, B: -1, PageUp: -1}[e.key];
       if (step) { e.preventDefault(); this.showPair(step); }
+    });
+  }
+  setupInspection() {
+    const select = document.getElementById("inspection-list"), issues = [];
+    const short = piece => piece.replace(/^piece-/, "");
+    const addGroup = (label, entries) => {
+      entries = entries.filter(entry => inspectionMatchesMaterial(entry, document.getElementById("material-filter").value, this.model.pieces));
+      if (!entries.length) return;
+      const group = document.createElement("optgroup"); group.label = `${label} (${entries.length})`;
+      for (const entry of entries) {
+        const option = document.createElement("option");
+        option.value = String(issues.length); option.textContent = entry.label;
+        issues.push(entry); group.append(option);
+      }
+      select.append(group);
+    };
+    const refresh = () => {
+      const previous = select.value === "" ? null : issues[Number(select.value)];
+      const hadSelection = select.value !== "";
+      issues.length = 0;
+      const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = "Choose an issue…";
+      select.replaceChildren(placeholder);
+    const entries = buildInspectionIssues(this.model, this.edgeRows, this.cricutRows, document.getElementById("label-mode").value);
+    addGroup("● Errors — confirmed conflicts", entries.filter(e=>e.severity==="error"));
+    addGroup("● Needs checking — uncertain, not necessarily wrong", entries.filter(e=>e.severity==="warning"));
+    if (document.getElementById("show-confirmed").checked)
+      addGroup("● Confirmed — reviewed and accepted", entries.filter(e=>e.severity==="confirmed"));
+    for (const option of select.querySelectorAll("optgroup option")) {
+      const issue = issues[Number(option.value)];
+      option.style.color = {error:"#ff8585",warning:"#ffd166",confirmed:"#8bdd9b"}[issue.severity];
+      option.textContent = `${{error:"ERROR",warning:"CHECK",confirmed:"CONFIRMED"}[issue.severity]} · ${issue.label}`;
+    }
+    select.disabled = !issues.length;
+    const errors = issues.filter(e=>e.severity==="error").length, warnings = issues.filter(e=>e.severity==="warning").length;
+    select.options[0].textContent = this.edgeChecksAvailable ? `${errors} errors · ${warnings} need checking${issues.length ? " — choose an issue…" : " for this cardstock"}` : "Source edge checks unavailable — inspection is incomplete";
+      const retained = hadSelection && previous ? issues.findIndex(issue => issue.reason === previous.reason) : -1;
+      select.value = retained >= 0 ? String(retained) : "";
+      if (retained < 0) this.setInspection(null);
+    };
+    refresh();
+    document.getElementById("material-filter").addEventListener("change", refresh);
+    document.getElementById("label-mode").addEventListener("change", refresh);
+    document.getElementById("show-confirmed").addEventListener("change", refresh);
+    select.addEventListener("change", () => {
+      if (select.value === "") { this.setInspection(null); return; }
+      const issue = issues[Number(select.value)], [first, ...others] = issue.pieces;
+      const filter = document.getElementById("material-filter");
+      if (filter.value && !inspectionMatchesMaterial(issue, filter.value, this.model.pieces)) {
+        filter.value = ""; filter.dispatchEvent(new Event("change"));
+      }
+      document.getElementById("pair-bar").hidden = true;
+      document.getElementById("find-text").value = "";
+      this.setInspection(issue);
+      this.folded.relatedPieces = others; this.pattern.only = new Set(issue.pieces);
+      this.folded.paint(first, null); this.pattern.paint(first, null);
+      this.folded.focusPiece(issue.pieces);
+      this.pattern.showCrops(issue.pieces, issue.glue || null, issue.reason);
+      this.describe(this.model.faces[this.model.facesOf.get(first)[0]]);
+      for (const piece of others) this.describe(this.model.faces[this.model.facesOf.get(piece)[0]], true);
+      document.getElementById("viewer-status").textContent = issue.reason;
     });
   }
   // Find a Cricut label, glue by its number, or piece by its id.
@@ -1450,11 +1857,19 @@ class Viewer {
       + `${twin ? `${piece} ↔ ${twin}` : `${piece} (no twin found)`} · ${judge ? `${judge} for you to judge (${this.model.pieces[piece]?.material}) · ` : ""}${unlike ? "shapes differ · " : ""}`
       + (trouble ? `${trouble} open glue${trouble === 1 ? "" : "s"} or wrong-way fold${trouble === 1 ? "" : "s"}` : "nothing flagged");
   }
-  select(face, from) {
+  setInspection(issue) {
+    const marks = inspectionMarks(this.model, issue);
+    this.folded.showInspection(marks); this.pattern.inspectionTargets = marks;
+    this.pattern.found.querySelectorAll(".inspection-marks").forEach(node=>node.remove());
+  }
+  select(face, from, recenter = true) {
     const f = this.model.faces[face];
+    this.setInspection(null);
+    this.folded.relatedPieces = [];
     this.folded.paint(f.piece, face); this.pattern.paint(f.piece, face);
     // Picked in 3D: the 2D side shows just that piece, cut from its page scan.
     if (from === "3d") {
+      if (recenter) this.folded.focus(face, true);
       this.pattern.only = new Set([f.piece]);
       this.pattern.showCrops([f.piece], null, `${f.piece} · ${this.model.pieces[f.piece]?.material || ""} cardstock`);
     } else this.folded.focus(face);
@@ -1504,7 +1919,7 @@ class Viewer {
   }
   showFaceMenu(face, x, y) {
     this.menuFace = face;
-    this.select(face, "3d");
+    this.select(face, "3d", false);
     const menu = this.faceMenu, f = this.model.faces[face], isTab = this.model.isTab(face);
     menu.querySelector('[data-tab="true"]').hidden = isTab;
     menu.querySelector('[data-tab="false"]').hidden = !isTab;
@@ -1559,11 +1974,12 @@ class Viewer {
 
 try {
   const labelsUrl = modelName ? `/api/labels?model=${encodeURIComponent(modelName)}` : "";
-  const [data, svgText, exportText, cricutRows] = await Promise.all([
+  const [data, svgText, exportText, cricutRows, edgeChecks] = await Promise.all([
     fetch(jsonUrl).then(r => { if (!r.ok) throw new Error(`${jsonUrl}: ${r.status}`); return r.json(); }),
     fetch(svgUrl).then(r => { if (!r.ok) throw new Error(`${svgUrl}: ${r.status}`); return r.text(); }),
     fetch(exportUrl).then(r => r.ok ? r.text() : "").catch(() => ""),  // optional: Cricut labels
     labelsUrl ? fetch(labelsUrl).then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
+    modelName ? fetch(`/api/edge-checks?model=${encodeURIComponent(modelName)}`).then(r=>r.ok?r.json():null).catch(()=>null) : Promise.resolve(null),
   ]);
   // Without the review server (e.g. the Pages site), Find reads the Cricut labels from the export SVG.
   if (!cricutRows.length && exportText) {
@@ -1576,7 +1992,8 @@ try {
     for (const [label, pieces] of byLabel) cricutRows.push({label, pieces: [...pieces].join(" ")});
   }
   const model = new Model(data);
-  window.viewer = new Viewer(model, svgText, exportText, readPrintLabels(svgText, cricutRows, model, exportText), cricutRows);
+  const orientedExport = orientPieceIdentifiers(exportText, model);
+  window.viewer = new Viewer(model, svgText, orientedExport, readPrintLabels(svgText, cricutRows, model, orientedExport), cricutRows, edgeChecks || [], edgeChecks !== null);
   window.addEventListener("message", event => {
     if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
         event.data?.type !== "review-select-piece") return;

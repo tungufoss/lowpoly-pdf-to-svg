@@ -1,24 +1,24 @@
 key,value
 project,bowser
-numbers,1573
+numbers,1569
 pieces,178
 pages,21
-matching,1544
-needs_work,29
-ocr_sure,1450
-auto_fixed,0
+matching,1548
+needs_work,21
+ocr_sure,1487
+auto_fixed,3
 auto_lookalike,0
-auto_mirror,0
-mirror_lines,786
-mirror_exact,52
-mirror_differ,3
-trace_faults,16
-cards_answered,646
-cards_changed,5
-piece_edits,275
-piece_edits_by_action,"add 54, drop 4, move 31, note 8, ok 178"
-lines_drawn,74
-lines_by_kind,"cut 45, fold 29"
-glue_total,739
-glue_closes,712
-glue_median_gap_mm,0.3
+auto_mirror,3
+mirror_lines,784
+mirror_exact,60
+mirror_differ,2
+trace_faults,12
+cards_answered,670
+cards_changed,14
+piece_edits,319
+piece_edits_by_action,"add 60, drop 8, drop-point 9, move 53, note 9, number 2, ok 178"
+lines_drawn,90
+lines_by_kind,"cut 56, fold 34"
+glue_total,754
+glue_closes,754
+glue_median_gap_mm,0.1

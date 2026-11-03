@@ -1,0 +1,7 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');const html=fs.readFileSync('app/fold3d-viewer.html','utf8');let start=html.indexOf('function styleViewerLabels(');const fn=vm.runInNewContext('('+html.slice(start,html.indexOf('\n}\n',start)+2)+')');
+const make=(piece=false)=>({style:{},attributes:{'font-size':piece?'10':'2'},hasAttribute:n=>piece&&n==='data-piece-number',setAttribute(k,v){this.attributes[k]=v;}});
+const pdf=make(),cricut=make(),piece=make(true);fn({querySelectorAll:()=>[pdf,cricut,piece]});assert.equal(pdf.attributes['font-size'],'5');assert.equal(cricut.attributes['font-size'],'5');assert.equal(piece.attributes['font-size'],'10');assert.equal(pdf.attributes['font-family'],cricut.attributes['font-family']);
+start=html.indexOf('  select(face, from, recenter = true) {');const method=vm.runInNewContext('({'+html.slice(start,html.indexOf('\n  // Pieces to cut again',start))+'})').select;
+const face={piece:'new'};let painted;const view={setInspection(){},model:{faces:[face]},folded:{relatedPieces:['old'],paint(p){painted=p;assert.equal(view.folded.relatedPieces.length,0);},focus(){}},pattern:{paint(){}},describe(){}};
+method.call(view,0,'test');assert.equal(painted,'new');
+console.log('Verified direct selection clears stale pair highlights; PDF and Cricut 2D labels share font size and style while piece-number sizing is preserved.');

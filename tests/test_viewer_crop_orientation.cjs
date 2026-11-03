@@ -1,0 +1,12 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const html=fs.readFileSync('app/fold3d-viewer.html','utf8'),ctx=vm.createContext({});
+const start=html.indexOf('function pieceUprightAngle(');
+vm.runInContext(html.slice(start,html.indexOf('function orientPieceIdentifiers(',start)),ctx);
+const model={faces:[{v:[0,1,2],flat:[[0,0],[10,0],[0,10]]}],vertices:[[0,0,0],[0,10,0],[10,0,0]],isTab:()=>false};
+assert.equal(ctx.uprightCropRotation(model,[0],0),-90);
+const bounds=ctx.rotatedCropBounds([0,0,10,20],90);
+assert.ok(Math.abs(bounds[2]-20)<1e-9 && Math.abs(bounds[3]-10)<1e-9);
+assert.ok(Math.abs(bounds[0]+5)<1e-9 && Math.abs(bounds[1]-5)<1e-9);
+model.isTab=()=>true;assert.equal(ctx.uprightCropRotation(model,[0],0),0);
+assert.match(html,/while \(svg.firstChild\) content.append\(svg.firstChild\)/);
+console.log('Verified whole-piece rotation counters paper orientation, fits rotated bounds, preserves the center and skips tabs.');

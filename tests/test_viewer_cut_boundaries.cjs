@@ -1,0 +1,16 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const html = fs.readFileSync(path.join(__dirname, '../app/fold3d-viewer.html'), 'utf8');
+const start = html.indexOf('function pieceBoundaryEdges(');
+const context = vm.createContext({});
+vm.runInContext(html.slice(start, html.indexOf('function readPrintLabels(', start)), context);
+const faces = [{piece: 'a', v: [0, 1, 2]}, {piece: 'a', v: [0, 2, 3]}, {piece: 'b', v: [0, 1, 4]}];
+const edges = context.pieceBoundaryEdges(faces);
+assert.equal(edges.filter(e => e.face.piece === 'a').length, 4);
+assert.equal(edges.filter(e => e.face.piece === 'b').length, 3);
+assert.ok(!edges.some(e => e.face.piece === 'a' && [e.a, e.b].includes(0) && [e.a, e.b].includes(2)));
+assert.equal(edges.filter(e => [e.a, e.b].includes(0) && [e.a, e.b].includes(1)).length, 2);
+assert.match(html, /buildInsideCuts\(innerSide, printedInside \? 1 : -1\)/);
+console.log('Verified bold boundaries exclude internal folds and retain both sides of joined pieces.');

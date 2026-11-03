@@ -168,6 +168,29 @@ class GluePairs:
         for pair, label in zip(self_joins, letters):
             pair.label = label
 
+    def confirm(self, records: list[dict]) -> None:
+        """Join explicitly identified duplicate-number edges without renumbering other labels."""
+        for record in records:
+            pieces = set(record['pieces'])
+            matches = [p for p in self.pairs if p.number == str(record['number'])
+                       and any(e.piece in pieces for e in p.edges)]
+            edges = [e for p in matches for e in p.edges]
+            if len(edges) != 2 or {e.piece for e in edges} != pieces or {e.side for e in edges} != {'edge', 'tab'}:
+                raise ValueError(f"ambiguous confirmed join: {record}")
+            label = record.get('label') or matches[0].label
+            cut = {p.frozen_label for p in matches if p.frozen_label} - {label}
+            if cut:  # an edge already cut keeps its label
+                raise ValueError(f"confirmed join {record} would relabel already-cut {', '.join(sorted(cut))}")
+            if any(p.label == label and p not in matches for p in self.pairs):
+                raise ValueError(f"confirmed label {label} is already used by another join")
+            for pair in matches:
+                pair.label = label
+            for edge in edges:
+                edge.status = 'ok'
+                edge.partner = next(e.piece for e in edges if e is not edge)
+            matches[0].edges = edges
+            self.pairs = [p for p in self.pairs if all(p is not old for old in matches[1:])]
+
     def freeze(self, records: list[dict], used: set[int]) -> None:
         """Pin complete pair identities from already-cut edges; ambiguity is fatal."""
         grouped = {}
@@ -209,6 +232,7 @@ class Materials:
         frozen = raw.get("export", {}).get("frozen_labels")
         self.frozen_labels = (json.loads((config.parent / frozen).read_text(encoding="utf-8"))["labels"]
                               if frozen else [])
+        self.confirmed_joins = raw.get('export', {}).get('confirmed_joins', [])
         self.project = str(raw["project"])
         self.pdf = str(raw["source"]["pdf"])
         self.names = {str(m["id"]): str(m["name"]) for m in raw["materials"]}
@@ -230,11 +254,13 @@ class ExportWriter:
     PIECE_ID = re.compile(r"piece-(\d+)-\d+$")
 
     def __init__(self, pairs: GluePairs, materials: Materials, alphabet: LabelAlphabet = LabelAlphabet(),
-                 twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 10.0):
+                 twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 10.0,
+                 piece_positions: dict[str, float] | None = None):
         self.pairs, self.materials, self.alphabet, self.twins = pairs, materials, alphabet, twins or {}
         # One size for every edge label (Helga: same font size); the pen font's cap height is 0.75 of it.
         self.sizes = (label_size,)
         self.number_size = number_size
+        self.piece_positions = piece_positions or {}
 
     def export(self, source: Path, target: Path, retab: "Retabber | None" = None) -> dict[str, int]:
         tree = ET.parse(source)
@@ -253,7 +279,7 @@ class ExportWriter:
 
         texts, used = [], set()
         pieces = [g for g in root.iter(f"{{{SVG}}}g") if g.get("data-material") is not None]
-        numbers = PieceNumbers([g.get("id") for g in pieces], self.twins)
+        numbers = PieceNumbers([g.get("id") for g in pieces], self.twins, self.piece_positions)
         for piece in pieces:
             match = self.PIECE_ID.match(piece.get("id", ""))
             page = int(match.group(1)) if match else 0
@@ -279,7 +305,19 @@ class ExportWriter:
                            self.sizes, taken=taken)
             numbers.add(piece, outline, self.number_size, taken)
         self.pairs.freeze(self.materials.frozen_labels, used)
+        # Explicitly retained short labels must be reserved before ordinary allocation.
+        for record in self.materials.confirmed_joins:
+            if record.get('label'):
+                owners = [p for p in self.pairs.pairs if p.number == str(record['number'])
+                          and any(e.piece == record['pieces'][0] for e in p.edges)]
+                if len(owners) != 1:
+                    raise ValueError(f"ambiguous retained confirmed label: {record}")
+                if owners[0].frozen_label and owners[0].frozen_label != record['label']:
+                    raise ValueError(f"confirmed label {record['label']} would relabel already-cut "
+                                     f"{owners[0].frozen_label}: {record}")
+                owners[0].frozen_label = record['label']
         self.pairs.assign(self.alphabet)
+        self.pairs.confirm(self.materials.confirmed_joins)
         for text, pair in texts:
             text.set("data-pdf-number", text.text or "")
             text.set("data-label", pair.label)
@@ -288,6 +326,10 @@ class ExportWriter:
             for attribute in ("fill", "data-review"):  # the review's orange "unsure" mark
                 text.attrib.pop(attribute, None)
 
+        model_path = target.with_name("fold3d.json")
+        if model_path.is_file():
+            from .identifier_orientation import orient_identifiers
+            orient_identifiers(root, json.loads(model_path.read_text(encoding="utf-8")))
         ET.indent(tree, space="")
         target.parent.mkdir(parents=True, exist_ok=True)
         tree.write(target, encoding="UTF-8", xml_declaration=True)
@@ -422,7 +464,7 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
             cx, cy = px + sx_ * d, py + sy_ * d
             corners = [(cx + kx * ux * half_w + ky * sx_ * half_h, cy + kx * uy * half_w + ky * sy_ * half_h)
                        for kx in (-1, 1) for ky in (-1, 1)]
-            if (not inside or all(_inside(c, outline) for c in corners)) \
+            if _inside((cx, cy), outline) and (not inside or all(_inside(c, outline) for c in corners)) \
                     and not any(_overlap(corners, box) for box in taken):
                 return cx, cy
         return None
@@ -443,6 +485,12 @@ def _place(text: ET.Element, line: tuple[float, ...], ox: float, oy: float,
             break
     if not placed:  # nowhere free: centred just off the edge
         placed = (size, mx + nx * (0.4 * size + 0.5), my + ny * (0.4 * size + 0.5))
+        if not _inside(placed[1:], outline):
+            segments = list(zip(outline, outline[1:] + outline[:1]))
+            segments += [edge for box in taken for edge in zip(box, box[1:] + box[:1])]
+            spot, _ = _widest_spot(outline, segments)
+            if spot:
+                placed = (size, *spot)
     size, cx, cy = placed
     half_w, half_h = 0.6 * size * chars / 2 + 1.0, 0.4 * size + 0.3  # with air round it, more along the line so 4S 5F never read as one
     taken.append([(cx + sx * ux * half_w + sy * nx * half_h, cy + sx * uy * half_w + sy * ny * half_h)
@@ -482,11 +530,14 @@ def _clearance(p: tuple[float, float], segments: list[tuple[tuple[float, float],
 class PieceNumbers:
     """A number in the middle of every piece, for finding pieces on the cut sheet. Pieces are
     numbered 1, 2, ... in piece order (page, then piece); a mirror twin (mirror-mismatches.csv)
-    shares its twin's number. The first of the two gets a circle round its number, the second a
-    square, so 4 in a circle and 4 in a square are the left and right copy of one part."""
+    shares its twin's number. The left copy gets a circle and the right a square, using the
+    folded model's x positions when available (source order is the fallback before folding).
+    An unpaired piece keeps its sequence slot with an A prefix and a triangle."""
 
-    def __init__(self, pieces: list[str], twins: dict[str, str] | None = None):
+    def __init__(self, pieces: list[str], twins: dict[str, str] | None = None,
+                 positions: dict[str, float] | None = None):
         twins = twins or {}
+        positions = positions or {}
         self.numbers, self.frames, count = {}, {}, 0
         for piece in sorted(pieces):
             if piece in self.numbers:
@@ -497,6 +548,23 @@ class PieceNumbers:
             if twin and twin in pieces and twin not in self.numbers:
                 self.numbers[twin] = count
                 self.frames[piece], self.frames[twin] = "circle", "square"
+                if piece in positions and twin in positions and positions[piece] > positions[twin]:
+                    self.frames[piece], self.frames[twin] = "square", "circle"
+            else:
+                self.frames[piece] = "triangle"
+
+    @staticmethod
+    def read_positions(path: Path) -> dict[str, float]:
+        """The viewer model is posed with its mirror normal along x."""
+        if not path.is_file():
+            return {}
+        model = json.loads(path.read_text(encoding='utf-8'))
+        vertices = {}
+        for face in model.get('faces', []):
+            if not face.get('tab'):
+                vertices.setdefault(face['piece'], set()).update(face['v'])
+        return {piece: sum(float(model['vertices'][i][0]) for i in ids) / len(ids)
+                for piece, ids in vertices.items() if ids}
 
     @staticmethod
     def read_twins(path: Path) -> dict[str, str]:
@@ -517,7 +585,8 @@ class PieceNumbers:
         pid, draw = piece.get("id"), piece.find(f".//{{{SVG}}}g[@data-operation='draw']")
         if pid not in self.numbers or draw is None or len(outline) < 3:
             return
-        text, frame = str(self.numbers[pid]), self.frames.get(pid)
+        frame = self.frames.get(pid)
+        text = ('A' if frame == 'triangle' else '') + str(self.numbers[pid])
         segments = list(zip(outline, outline[1:] + outline[:1]))
         for box in labels or []:
             segments += list(zip(box, box[1:] + box[:1]))
@@ -526,6 +595,9 @@ class PieceNumbers:
             return
         # Half the number's width in font sizes (pen font: 0.69 per character, cap 0.75), plus the frame.
         half = max(0.69 * len(text) - 0.19, 0.75) / 2 * (1.45 if frame else 1.0)
+        if frame == 'triangle':
+            # The triangle's inradius must contain the whole text rectangle.
+            half = 2 * math.hypot((0.69 * len(text) - 0.19) / 2, 0.375)
         size = max(3.0, min(biggest, (room - 0.5) / half))
         x, y = best
         colour = _style_value(draw.get("style", ""), "fill") or "#000000"
@@ -544,6 +616,9 @@ class PieceNumbers:
             r = half * size * (1.15 if frame == "circle" else 1.0)
             ring = ([(x + r * math.cos(k * math.pi / 12), y + r * math.sin(k * math.pi / 12)) for k in range(25)]
                     if frame == "circle" else [(x - r, y - r), (x + r, y - r), (x + r, y + r), (x - r, y + r), (x - r, y - r)])
+            if frame == 'triangle':
+                ring = [(x + r * math.cos(angle), y + r * math.sin(angle))
+                        for angle in (-math.pi / 2, math.pi / 6, 5 * math.pi / 6, -math.pi / 2)]
             ET.SubElement(draw, f"{{{SVG}}}path", {"d": "M " + " ".join(f"{px:.3f},{py:.3f}" for px, py in ring),
                                                  "style": f"fill:none;stroke:{colour};stroke-width:0.3",
                                                  "data-operation": "draw", "data-mark": frame,
@@ -616,8 +691,8 @@ class ExportContract:
                 if operation == "score" and leaf.get("data-fold") not in ("mountain", "valley"):
                     problems.append(f"{pid}: score path without data-fold mountain/valley")
                 if operation == "draw" and leaf.tag == f"{{{SVG}}}path":
-                    if leaf.get("data-mark") not in ("circle", "square", "underline") or not leaf.get("data-piece-number"):
-                        problems.append(f"{pid}: draw path that is not a piece-number circle, square or underline")
+                    if leaf.get("data-mark") not in ("circle", "square", "triangle", "underline") or not leaf.get("data-piece-number"):
+                        problems.append(f"{pid}: draw path that is not a piece-number circle, square, triangle or underline")
                 elif operation == "draw":
                     if not leaf.get("data-label") or leaf.get("data-label") != (leaf.text or ""):
                         problems.append(f"{pid}: label text and data-label differ")
@@ -678,7 +753,8 @@ def main() -> int:
     retab = (Retabber(style, folder / "mirror-mismatches.csv", folder / "fold3d.json")
              if style and not args.traced_tabs else None)
     counts = ExportWriter(pairs, Materials(args.config), twins=twins, label_size=args.label_size,
-                          number_size=args.number_size).export(source, target, retab)
+                          number_size=args.number_size,
+                          piece_positions=PieceNumbers.read_positions(folder / 'fold3d.json')).export(source, target, retab)
     pairs.write(folder / f"{project}-labels.csv")
     problems = ExportContract(target).errors()
     print(f"{target}: {counts['pieces']} pieces filled, {counts['labels']} numbers -> "
