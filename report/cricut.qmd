@@ -61,12 +61,13 @@ still held when the blade goes round the pieces. Weed the pieces off the mat slo
 ## 4. Assemble
 
 - Fold first: valley folds along the debossed lines, mountain folds along the scored lines.
-- Every glue edge carries a two-character label; the edge with the same label on another piece (or on a
-  tab) is its partner. Glue tab to face, one pair at a time.
+- Every glue edge carries a short label (usually two characters, one letter where a piece joins itself,
+  longer on very large models); the other edge with the same label is its partner, on another piece or on
+  the same one. Glue tab to face, one pair at a time.
 - Mirror twins share a piece number, one drawn in a circle and the other in a square.
 - Wide flaps sit on seams that carry load (big pieces, horns, snout); glue them flat on the inside.
 - `<m>-labels.csv` lists every label with its PDF number and pieces, if you need to check against the PDF
-  instructions. The [3D viewer](usage.qmd#3d-viewer-and-piece-review) with *Labels: Cricut* shows where
+  instructions. The [3D viewer](usage.qmd#viewer) with *Labels: Cricut* shows where
   each label sits on the folded model.
 
 ## Recut a few pieces

@@ -44,13 +44,13 @@ The numbers are text, so you can correct one by double-clicking it. For the Cric
 
 For cutting the export on a Cricut (cut plan, Design Space operations, recut), see [Cutting on a Cricut](cricut.qmd).
 
-## 3D viewer and Piece Review
+## 3D viewer and Piece Review {#viewer}
 
 `app/fold3d-viewer.html` shows the folded model (`fold3d.json`) beside the flat pattern; picking a face in 3D shows that piece, cropped from its page when scans are available, and picking a piece in 2D lights up its faces. The models repository serves it with `make review MODEL=<model>` (local, with saving) and puts a read-only copy on its unlisted site with `make site`.
 
 - **Cardstock** filter shows one material in both views; *Cardstock tint* sets how strongly faces take the card colour.
 - **Labels** switches between the PDF numbers and the Cricut labels from the export (short glue labels and piece numbers, mirror twins sharing a number in a circle or square); *3D numbers* chooses which labels sit on the faces.
-- **Find** takes a Cricut label or glue number (shows the paired pieces, glue edge in red) or a piece id (that piece and its twin); *Show all pages* goes back.
+- **Find** takes a PDF glue number (the two pieces, glue edge in red), a Cricut label (the pieces carrying it) or a piece id (that piece and its twin); *Show all pages* goes back.
 - **Mirror pairs** steps through the twin pairs, worst first, with *Back*/*Next* (keys B and N); *Edit pair…* opens both in Piece Review.
 - Right-click a face to *Edit piece in Piece Review…*, mark it as tab or surface (*Save tab marks & re-glue* writes the overrides and folds again), or *Recut this piece*; *Make recut* then runs `make recut` and opens the Cricut upload.
 - The split between the two views can be dragged or collapsed to either side.

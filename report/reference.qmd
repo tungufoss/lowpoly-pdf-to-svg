@@ -135,7 +135,8 @@ every unit takes about 4.5 minutes, and a run after a one-unit edit takes about 
 Mirror twins (pieces whose faces mirror each other) are pulled towards mirrored poses while the
 glue settles. Twins still far from mirrored after that are snapped: the side with more open glues
 is laid exactly onto the mirror image of the other, worst pair first, and the glue settles again
-(`mirror snap` in the log). Tabs are copied from the twin's shape, so twins keep the same surface.
+(`mirror snap` in the log). A flap whose sides match a tab on its twin is marked as a tab too, so twins keep the same surface
+(the traced shape is not changed).
 
 ### Modular glue plan
 
