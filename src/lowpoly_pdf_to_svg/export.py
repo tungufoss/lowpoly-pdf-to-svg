@@ -178,6 +178,9 @@ class GluePairs:
             if len(edges) != 2 or {e.piece for e in edges} != pieces or {e.side for e in edges} != {'edge', 'tab'}:
                 raise ValueError(f"ambiguous confirmed join: {record}")
             label = record.get('label') or matches[0].label
+            cut = {p.frozen_label for p in matches if p.frozen_label} - {label}
+            if cut:  # an edge already cut keeps its label
+                raise ValueError(f"confirmed join {record} would relabel already-cut {', '.join(sorted(cut))}")
             if any(p.label == label and p not in matches for p in self.pairs):
                 raise ValueError(f"confirmed label {label} is already used by another join")
             for pair in matches:
@@ -309,6 +312,9 @@ class ExportWriter:
                           and any(e.piece == record['pieces'][0] for e in p.edges)]
                 if len(owners) != 1:
                     raise ValueError(f"ambiguous retained confirmed label: {record}")
+                if owners[0].frozen_label and owners[0].frozen_label != record['label']:
+                    raise ValueError(f"confirmed label {record['label']} would relabel already-cut "
+                                     f"{owners[0].frozen_label}: {record}")
                 owners[0].frozen_label = record['label']
         self.pairs.assign(self.alphabet)
         self.pairs.confirm(self.materials.confirmed_joins)

@@ -585,7 +585,7 @@ function readPrintLabels(svgText, cricutRows, model, exportText = "") {
       for (const node of group.querySelectorAll('text[data-label]')) {
         const x = Number(node.getAttribute("x")), y = Number(node.getAttribute("y"));
         const frame = node.hasAttribute("data-piece-number")
-          ? node.parentNode.querySelector('path[data-mark]')?.getAttribute("data-mark") : "";
+          ? node.parentNode.querySelector('path[data-mark="circle"], path[data-mark="square"], path[data-mark="triangle"]')?.getAttribute("data-mark") : "";
         const mark = {circle: "○", square: "□", triangle: "△"}[frame] || "";
         const angle = Number(node.getAttribute("transform")?.match(/rotate\(([-\d.]+)/)?.[1] || 0);
         labels.push({piece, pdfNumber: node.getAttribute("data-pdf-number"), text: "", cricut: mark + node.textContent.trim(),
@@ -863,8 +863,8 @@ class FoldedView {
     for (const [faceIndex, face] of this.model.faces.entries()) {
       if (this.model.isTab(faceIndex)) continue;
       if (face.piece !== label.piece || !face.flat || face.flat.length !== face.v.length) continue;
-      for (let k = 1; k + 1 < face.v.length; k++) {
-        const ids = [0, k, k + 1], flat = ids.map(i => face.flat[i]);
+      for (const ids of faceTriangles(face)) {  // real triangles, so concave faces never map into a notch
+        const flat = ids.map(i => face.flat[i]);
         const bary = flatBarycentric([label.x, label.y], ...flat);
         if (!bary) continue;
         const outside = bary.reduce((sum, v) => sum + Math.max(0, -v), 0);
@@ -943,8 +943,10 @@ class FoldedView {
       this.numbers.visible = this.labelMode === "glue" && !!selected;
       for (const sprite of this.numbers.children) {
         const {piece, glue} = sprite.userData;
-        sprite.visible = piece ? piece === selected && !!this.cricut :
-          !!selected && [glue.piece, glue.tab_piece].includes(selected);
+        const material = this.material;
+        const shown = !material || this.onlyMaterial(sprite.userData.materials, material);
+        sprite.visible = shown && (piece ? piece === selected && !!this.cricut :
+          !!selected && [glue.piece, glue.tab_piece].includes(selected));
       }
     }
   }

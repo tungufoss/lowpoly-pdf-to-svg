@@ -167,7 +167,7 @@ def main() -> int:
     if not svg.is_file():
         parser.error(f"{svg} not found; run make first")
     pieces = read_pieces(svg)
-    glues, _ = GlueFinder(pieces).find()
+    glues, _ = GlueFinder(pieces, GlueFinder.confirmed_pairs(svg)).find()
     plan = GluePlan({p.id: p.material for p in pieces}, glues)
     plan.write(out, read_status(out / "fold3d-glue.csv"))
     print(plan.summary())
