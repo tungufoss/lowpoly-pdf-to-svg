@@ -35,7 +35,7 @@ Each sheet holds up to four compound paths, one per tool, in the planned order:
 | `score-mountain` | Score | Double scoring wheel, mountain folds |
 | `draw` | Pen | Fine-point pen: glue labels and piece numbers |
 
-The document size is in inches, so the pieces import at their real size.
+The SVG sizes are in real units (inches or millimetres), so the pieces import at their real size.
 
 ## 2. Upload to Design Space
 
