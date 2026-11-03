@@ -1,18 +1,12 @@
 page,status,n
-4,unpaired,1
+4,unpaired,3
+5,length mismatch,1
 5,unpaired,1
+6,length mismatch,4
 7,extra copy: likely misread,2
-7,unpaired,1
-8,extra copy: likely misread,2
 9,extra copy: likely misread,2
-9,unpaired,1
-11,unpaired,3
-12,printed 3 times,2
-12,unpaired,3
-13,printed 3 times,1
-14,extra copy: likely misread,2
-16,unpaired,1
-17,unpaired,1
-22,extra copy: likely misread,2
+11,length mismatch,1
+11,unpaired,1
+12,no tab,4
 24,extra copy: likely misread,1
-24,unpaired,3
+24,unpaired,1

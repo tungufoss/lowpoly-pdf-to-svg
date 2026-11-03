@@ -1,8 +1,10 @@
 source,outcome,n
-person changed,pairs (ok),2
-person changed,still open,1
-person confirmed,pairs (ok),625
-person confirmed,still open,16
-readers sure,pairs (ok),841
-readers unsure,pairs (ok),76
-readers unsure,still open,12
+fixed by the program,pairs (ok),1
+fixed by the program,still open,2
+person changed,pairs (ok),20
+person confirmed,pairs (ok),642
+person confirmed,still open,13
+readers sure,pairs (ok),818
+readers sure,still open,4
+readers unsure,pairs (ok),67
+readers unsure,still open,2

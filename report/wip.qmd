@@ -1,38 +1,21 @@
 ---
 title: "Work in progress"
-date: 2026-10-16
+date: 2026-11-03
 date-format: long
 ---
 
-Changes that are built but not merged yet, and the research issues they feed. Each entry
-links its pull request or issue; numbers are from the PR's own run and will move once it
-merges and the site rebuilds.
+What is still open, by issue. Everything described on the other pages is merged.
 
-## Piece review follow-up
+## Open pipeline work
 
-[PR #16](https://github.com/tungufoss/lowpoly-pdf-to-svg/pull/16), draft. Stage: fold
-detection and hand corrections.
-
-- A fold added in the piece review takes the mountain or valley style printed under it,
-  read with the same dash classifier as traced folds. The hand pick only counts where no fold
-  is printed. On 6 of the first 15 added folds the pick disagreed with the printed line.
-- After hand edits, every piece is tidied: corners and fold ends within 0.8 mm become one
-  point, a fold with another point on it is split there, and duplicate folds or folds along
-  the cut are dropped.
-- Brings in the full review of all 178 pieces: 46 folds added, 3 dropped, 19 corners moved.
-- Clean number pairs go from 1462 to 1466 of 1575.
-
-## 3D fold-up against the finished model
-
-[PR #18](https://github.com/tungufoss/lowpoly-pdf-to-svg/pull/18), draft. Stage: 3D fold
-check ([3D fold-up](fold3d.qmd)).
-
-- `bowser.yaml` gets a `reference:` block with the finished model's size from its public
-  Sketchfab metadata: 1238 triangles and 633 corners.
-- `make -f fold3d.mk` writes `fold3d-baseline.csv`, comparing the folded trace with
-  those counts. Corners stay doubled wherever a glue is missing or misread, so the corner
-  difference measures how much matching is left.
-- On the current trace: 1375 triangles (+137) and 862 corners (+229).
+| issue | what | state |
+|---|---|---|
+| [#68](https://github.com/tungufoss/lowpoly-pdf-to-svg/issues/68) | wider, interwoven glue tabs that never cross a fold; merge needlessly small pieces | generated tabs and flaps merged; merging small pieces not started; Bowser still cut with the PDF's tabs |
+| [#37](https://github.com/tungufoss/lowpoly-pdf-to-svg/issues/37) | modular glue: per-cardstock units, then joins between colours | plan and fold merged; review-server hook and viewer steps open |
+| [#35](https://github.com/tungufoss/lowpoly-pdf-to-svg/issues/35) | prebuilt same-cardstock components for a fast re-glue | merged; measured cold vs warm comparison still to run |
+| [#34](https://github.com/tungufoss/lowpoly-pdf-to-svg/issues/34) | rebuild only the pages a review edit touched | merged; one-piece edit check outstanding |
+| [#31](https://github.com/tungufoss/lowpoly-pdf-to-svg/issues/31) | folds still bent the wrong way | a few remain (counted in the viewer header) |
+| [#28](https://github.com/tungufoss/lowpoly-pdf-to-svg/issues/28) | export follow-ups and a real Design Space test | Bowser green is cut and assembled; the label audit over the whole model is pending |
 
 ## Research issues
 
