@@ -230,6 +230,7 @@ class Segmentation:
         self.mesh, self.region = mesh, region
         self.piece = {i: f"f{i}" for i in range(len(mesh.faces))}
         self.layout = {f"f{i}": Layout.single(mesh, i) for i in region}
+        self.pool: dict[frozenset, Layout] | None = None    # every piece merged, for partition.py
         for i in set(range(len(mesh.faces))) - region:   # outside the region: the PDF's pieces
             self.piece[i] = mesh.faces[i].piece
 
@@ -237,6 +238,7 @@ class Segmentation:
         new = Segmentation.__new__(Segmentation)
         new.mesh, new.region = self.mesh, self.region
         new.piece, new.layout = dict(self.piece), dict(self.layout)
+        new.pool = self.pool
         if hasattr(self, "_edges"):
             new._edges = self._edges
         return new
@@ -271,7 +273,21 @@ class Segmentation:
             self.piece[f] = p
         self.layout[p] = joined
         del self.layout[q]
+        if self.pool is not None:
+            self.pool.setdefault(frozenset(joined.placed), joined)
         return True
+
+    @classmethod
+    def from_layouts(cls, mesh: Mesh, region: set[int], layouts: list[Layout]) -> "Segmentation":
+        """The pieces given (they must cover the region exactly once)."""
+        seg = cls(mesh, region)
+        seg.layout = {}
+        for lay in layouts:
+            label = f"f{min(lay.placed)}"
+            seg.layout[label] = lay
+            for f in lay.placed:
+                seg.piece[f] = label
+        return seg
 
     def edge_kind(self, edge: frozenset) -> str:
         faces = self.mesh.edge_faces[edge]

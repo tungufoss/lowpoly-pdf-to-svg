@@ -17,6 +17,8 @@
 #   make segment PIECES=piece-11-04,piece-11-05  (or MATERIAL=green) re-cut those pieces and their
 #                   twins from the 3D mesh (fold3d.json): fewer pieces, no seam shorter than a 15 mm
 #                   tape strip, mirror twins kept; CSVs, flat SVG and a 3D preview in data/<project>/segment/
+#   make partition MATERIAL=green  the same, solved exactly over a pool of candidate pieces
+#                   (set partitioning; SOLVER=gurobi uses Gurobi, default HiGHS from SciPy)
 #   make install    install Python dependencies (Poppler's pdftoppm comes from the OS)
 #   make example    regenerate data/example/example.pdf from bench/synth.py (needs scipy, shapely, cairosvg)
 #   make clean      remove generated files (keeps the PDF and YAML)
@@ -31,7 +33,7 @@ DPI     ?= 180
 SOURCES := $(filter-out %/export.py %/fold3d.py,$(wildcard src/lowpoly_pdf_to_svg/*.py))
 CONVERT  = $(PYTHON) -m src.lowpoly_pdf_to_svg --config $(CONFIG) --output $(OUT) --dpi $(DPI)
 
-.PHONY: all page redo piece number fix export export-check segment example install clean
+.PHONY: all page redo piece number fix export export-check segment partition example install clean
 
 all: $(OUT)/$(PROJECT).svg
 
@@ -70,6 +72,12 @@ segment:
 	@test -f $(OUT)/fold3d.json || { echo "run make -f fold3d.mk first"; exit 2; }
 	$(PYTHON) -m src.lowpoly_pdf_to_svg.segment --fold3d $(OUT)/fold3d.json --name $(SEGMENT) \
 	  $(if $(PIECES),--pieces $(PIECES),) $(if $(MATERIAL),--material $(MATERIAL),) $(if $(RESTARTS),--restarts $(RESTARTS),)
+
+partition:
+	@test -f $(OUT)/fold3d.json || { echo "run make -f fold3d.mk first"; exit 2; }
+	$(PYTHON) -m src.lowpoly_pdf_to_svg.partition --fold3d $(OUT)/fold3d.json --name $(SEGMENT)-partition \
+	  $(if $(PIECES),--pieces $(PIECES),) $(if $(MATERIAL),--material $(MATERIAL),) \
+	  $(if $(RESTARTS),--restarts $(RESTARTS),) $(if $(SOLVER),--solver $(SOLVER),)
 
 export-check:
 	$(PYTHON) -m src.lowpoly_pdf_to_svg.export --config fixtures/export/sample.yaml --svg fixtures/export/sample-review.svg
