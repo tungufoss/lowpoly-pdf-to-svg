@@ -1,0 +1,78 @@
+---
+title: "Cutting on a Cricut"
+---
+
+This is the last mile: from a reviewed model to cut, scored and labelled cardstock. It assumes the
+review and `make fix` rounds are done (see the [Guide](usage.qmd)). Commands are the ones in a
+models repository that has this converter and
+[papercraft-nester](https://github.com/tungufoss/papercraft-nester) as submodules; `<m>` is the
+model name.
+
+## 1. Export and plan the cuts
+
+```sh
+make cutpath MODEL=<m>    # export, then order the tool paths on each sheet as laid out in the PDF
+make nest MODEL=<m>       # or: export, re-nest pieces onto your sheets, then plan the cuts
+```
+
+Both start with `make export` (short labels, cardstock fill, wider glue tabs; see
+[Exporting for the Cricut](usage.qmd#exporting-for-the-cricut)). The cut planner then writes, in
+`data/<m>/`:
+
+| File | Use |
+|---|---|
+| `<m>-cutplan-cricut.svg` (or `<m>-nested-cutplan-cricut.svg`) | One upload: every sheet side by side, one row per cardstock colour, one group per sheet (`P04-red`) |
+| `<m>-cutplan-sheets/` | One SVG per sheet, if you prefer to upload sheet by sheet |
+| `<m>-cutplan.svg` | Inkscape view with one layer per pass and a hidden Review layer of the moves |
+| `<m>-cutplan.csv` | Cut and travel length per sheet and pass |
+
+Each sheet holds up to four compound paths, one per tool, in the planned order:
+
+| Path | Design Space operation | Tool |
+|---|---|---|
+| `cut` | Basic Cut | Fine-point blade |
+| `deboss-valley` | Deboss (or Score) | Debossing tip, valley folds |
+| `score-mountain` | Score | Double scoring wheel, mountain folds |
+| `draw` | Pen | Fine-point pen: glue labels and piece numbers |
+
+The document size is in inches, so the pieces import at their real size.
+
+## 2. Upload to Design Space
+
+1. *New project → Upload → Upload image*, pick the Cricut SVG (or one sheet SVG) and add it to the canvas.
+2. Check the size against a known piece; do not rescale.
+3. Ungroup the sheet down to its paths. Set the operation of each path from the table above: Design Space
+   imports everything as Basic Cut. Give `draw` a pen colour that shows on that cardstock (white on dark card).
+4. Select the paths of one sheet and *Attach* them, so score and pen marks stay on their pieces and the
+   sheet keeps its layout on the mat.
+5. Repeat for each sheet. Sheets of the same colour go on mats of that cardstock.
+
+Design Space changes between versions: check operation names in
+[Cricut's operation guide](https://help.cricut.com/hc/en-us/articles/26922998476183-Design-Space-Selecting-Operation)
+and the [upload guide](https://help.cricut.com/hc/en-us/articles/360009556313-How-to-upload-images-into-Design-Space).
+Uploads are limited to 5,000 paths, which the compound paths keep well under.
+
+## 3. Cut
+
+*Make it*, choose the mat size (12 × 12 in for the default sheets) and the cardstock setting, and
+load the tools as Design Space asks. The machine draws and scores before it cuts, so the paper is
+still held when the blade goes round the pieces. Weed the pieces off the mat slowly to keep the tabs.
+
+## 4. Assemble
+
+- Fold first: valley folds along the debossed lines, mountain folds along the scored lines.
+- Every glue edge carries a two-character label; the edge with the same label on another piece (or on a
+  tab) is its partner. Glue tab to face, one pair at a time.
+- Mirror twins share a piece number, one drawn in a circle and the other in a square.
+- Wide flaps sit on seams that carry load (big pieces, horns, snout); glue them flat on the inside.
+- `<m>-labels.csv` lists every label with its PDF number and pieces, if you need to check against the PDF
+  instructions. The [3D viewer](usage.qmd#3d-viewer-and-piece-review) with *Labels: Cricut* shows where
+  each label sits on the folded model.
+
+## Recut a few pieces
+
+A piece spoiled or cut in the wrong colour? List it in `data/<m>/recut.txt` (piece number for both twins,
+`27:DB` for one twin, or a piece id like `11-01`), or click it with `make recut-select MODEL=<m>`, or
+right-click it in the 3D viewer and pick *Recut this piece*. `make recut MODEL=<m>` packs only those pieces
+onto fresh sheets, with the labels they already carry, and writes
+`data/<m>/recut/<m>-recut-cutplan-cricut.svg` for upload.

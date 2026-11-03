@@ -132,6 +132,11 @@ every unit takes about 4.5 minutes, and a run after a one-unit edit takes about 
 | `--cold` | off | Ignore saved poses and caches and place every piece from scratch (`COLD=1` in Make) |
 | `--rejoin` | off | Let the join move every unit, not only the units changed since the saved pose (`REJOIN=1` in Make) |
 
+Mirror twins (pieces whose faces mirror each other) are pulled towards mirrored poses while the
+glue settles. Twins still far from mirrored after that are snapped: the side with more open glues
+is laid exactly onto the mirror image of the other, worst pair first, and the glue settles again
+(`mirror snap` in the log). Tabs are copied from the twin's shape, so twins keep the same surface.
+
 ### Modular glue plan
 
 The glue is planned in three stages, and `fold3d.py` folds in the same order:
