@@ -118,6 +118,43 @@ that fold to within 2 mm of mirrored, against all tied pairs.
 | `length_diff_mm` | Difference between the two edge lengths |
 | `status` | `ok`, `length mismatch`, `both tabs`, `no tab`, `unpaired`, `line not found`, `printed N times` |
 
+## Head fit {#head-fit}
+
+`make -f fold3d.mk headfit` (or `python -m src.lowpoly_pdf_to_svg.headfit --config …`) puts a
+head inside the folded model (`fold3d.json`) and finds the smallest scale of the mask at which the
+head fits with `clearance_mm` of air all round. The head may leave through the neck opening (the
+largest opening); everywhere else it must stay inside the card. A ray straight ahead from each
+pupil then finds where the wearer looks out: through an opening, or through a piece that needs a
+sight hole. It takes about a minute and does not change the pattern. Scaling the export itself
+is the next step (issue #79); until then, resize every sheet by the same percentage in Cricut
+Design Space.
+
+```yaml
+fit:
+  head: female            # child | female | male
+  circumference_mm: 545   # optional: tape round the head above brow and ears; scales the preset
+  eye_distance_mm: 61     # optional: pupil to pupil
+  clearance_mm: 10        # air between head and card (default 10)
+  sight_hole_mm: 30       # sight hole diameter (default 30)
+  up: +z                  # axes of the folded model (defaults suit Bowser)
+  front: -y
+```
+
+The presets are rounded means (adult men and women in the style of ANSUR II, and a child of about
+eight); a measured circumference and pupil distance are better. The head is two ellipsoids
+(cranium; face and jaw) and a nose, placed round the pupils.
+
+| Make variable | Description |
+|---|---|
+| `HEAD=child` | Fit this preset instead of the YAML's |
+| `COMPARE=1` | Also print the fit of every preset |
+
+| File | Contents |
+|---|---|
+| `head-fit.json` | Head used, `scale`, mask size at that scale, pupil position, `tightest_mm`, and per eye: `through` (`card` or `opening`), the `piece`, distance ahead and the hole centre on the flat piece (`flat_mm`, pattern millimetres before scaling) |
+| `head-fit-views.svg` | A4: front and side of the scaled mask with the head and lines of sight |
+| `head-fit-eyes.svg` | A4 at 1:1 (print at 100 %): each piece the eyes look through, at the fitted scale, with the sight hole to cut |
+
 ## 3D fold-up
 
 `make -f fold3d.mk` (or `python -m src.lowpoly_pdf_to_svg.fold3d --config …`) folds the traced
