@@ -36,27 +36,27 @@ def cut(root, piece):
 class GeneratedTabs(unittest.TestCase):
     def test_tab_is_wider_and_stays_clear_of_the_partner_fold(self):
         root = ET.fromstring(REVIEW)
-        stats = Retabber(TabStyle(depth_mm=7, flap_mm=0)).apply(root, pairs())
+        stats = Retabber(TabStyle(depth_mm=7.5, flap_mm=0)).apply(root, pairs())
         self.assertEqual(stats["tabs generated"], 1)
         tab = cut(root, "piece-01-01").difference(Polygon([(0, 0), (20, 0), (20, 20), (0, 20)]))
         self.assertGreater(tab.bounds[2], 25)            # wider than the traced 5 mm
-        self.assertLessEqual(tab.bounds[2], 27.001)      # no deeper than 7 mm
+        self.assertLessEqual(tab.bounds[2], 27.501)      # no deeper than 7.5 mm
         # b laid flat across the seam: its diagonal fold lands on (20, 0)-(40, 20); the tab keeps
         # the margin from it, so it never has to bend.
         self.assertGreaterEqual(tab.distance(LineString([(20, 0), (40, 20)])), 0.79)
 
     def test_flap_fills_the_face_but_not_past_the_fold(self):
         root = ET.fromstring(REVIEW)
-        Retabber(TabStyle(depth_mm=7, flap_mm=20, flaps=["piece-01-02"])).apply(root, pairs())
+        Retabber(TabStyle(depth_mm=7.5, flap_mm=20, flaps=["piece-01-02"])).apply(root, pairs())
         tab = cut(root, "piece-01-01").difference(Polygon([(0, 0), (20, 0), (20, 20), (0, 20)]))
         self.assertGreater(tab.area, 7 * 20 * 0.6)       # bigger than a plain tab
         self.assertLess(tab.area, 200)                   # inside the 200 mm2 triangle it glues onto
 
     def test_small_pieces_get_plain_tabs_unless_listed(self):
         root = ET.fromstring(REVIEW)
-        Retabber(TabStyle(depth_mm=7, flap_mm=20)).apply(root, pairs())
+        Retabber(TabStyle(depth_mm=7.5, flap_mm=20)).apply(root, pairs())
         tab = cut(root, "piece-01-01").difference(Polygon([(0, 0), (20, 0), (20, 20), (0, 20)]))
-        self.assertLessEqual(tab.bounds[2], 27.001)
+        self.assertLessEqual(tab.bounds[2], 27.501)
 
     def test_tabs_false_keeps_the_traced_tabs(self):
         self.assertIsNone(TabStyle.from_config(False))
