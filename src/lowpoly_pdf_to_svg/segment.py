@@ -43,6 +43,7 @@ DART_MM = 0.0         # a dart's slit narrower than this counts as a short seam 
 TINY_MM2 = 600.0     # a piece smaller than this (about 25 x 25 mm) is fiddly to fold and glue
 SHEET_MM = (180.0, 249.0)   # A4 and Letter (the smaller of each side) less a 15 mm border for tabs
 SHEET_AREA = SHEET_MM[0] * SHEET_MM[1]
+MAX_PIECE_MM = SHEET_MM       # largest piece allowed (partition.py --max-piece): smaller pieces pack better
 BOX_WEIGHT = 20 / SHEET_AREA  # a sheet's worth of bounding boxes costs as much as one piece
 
 
@@ -241,6 +242,10 @@ def _shoelace(p: np.ndarray) -> float:
     return 0.5 * float(x @ np.roll(y, -1) - y @ np.roll(x, -1))
 
 
+def segment_box_weight() -> float:
+    return BOX_WEIGHT
+
+
 class Layout:
     """One piece laid flat: each face's corners in the piece's paper coordinates."""
 
@@ -273,7 +278,8 @@ class Layout:
             return None
         return Layout(self.mesh, {**self.placed, **moved})
 
-    def fits(self, sheet=SHEET_MM) -> bool:
+    def fits(self, sheet=None) -> bool:
+        sheet = sheet or MAX_PIECE_MM
         sides = self.size()
         return sides[0] <= min(sheet) and sides[1] <= max(sheet)
 
@@ -438,7 +444,7 @@ class Segmentation:
         parts = {"short_seams": short, "seams": len(runs), "darts": darts, "pieces": len(labels),
                  "tiny_pieces": tiny, "seam_mm": round(length, 1), "sheets": round(box / SHEET_AREA, 2)}
         return (100 * short + 60 * tiny + 20 * len(labels) + 5 * len(runs) + 10 * darts + length / 10
-                + BOX_WEIGHT * box), parts
+                + segment_box_weight() * box), parts
 
     def mirror_label(self, label: str) -> str | None:
         m = self.mesh.mirror_face.get(self.members(label)[0])
@@ -608,6 +614,42 @@ class Report:
         h = y + row_h + 10
         path.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="{width + 20}mm" height="{h:.0f}mm" '
                         f'viewBox="0 0 {width + 20} {h:.0f}">\n' + "\n".join(out) + "\n</svg>\n")
+
+    def nest_svg(self, path: Path, page: int = 90, depth: float = 7.5):
+        """The pieces as a minimal lowpoly-export/1 file for papercraft-nester's `nest`: one
+        group per piece (ids piece-<page>-NN, cardstock in data-material) with its cut
+        outline, a 7.5 mm tab on one side of every seam (the piece whose name sorts first),
+        and dart flaps. Enough to count sheets; not a cutting file."""
+        out = []
+        for n, label in enumerate(sorted(self.seg.layout, key=self.names.get), start=1):
+            lay = self.seg.layout[label]
+            shape = lay.outline()
+            for i, p in lay.placed.items():
+                for k, a, b in self.mesh.faces[i].edges():
+                    edge = frozenset((a, b))
+                    faces = self.mesh.edge_faces[edge]
+                    if len(faces) < 2:
+                        continue
+                    other = next(f for f, _ in faces if f != i)
+                    q = self.seg.piece[other]
+                    mine = self.names.get(label, label) < self.names.get(q, q)
+                    if self.seg.edge_kind(edge) == "seam" and mine:
+                        shape = shape.union(self._flap(p[k], p[(k + 1) % len(p)], p.mean(axis=0), depth)
+                                            .difference(lay.outline()))
+                    elif self.seg.edge_kind(edge) == "dart" and i != min(f for f, _ in faces):
+                        q0, q1 = lay.corner(other, a), lay.corner(other, b)
+                        shape = shape.union(Polygon([p[k], p[(k + 1) % len(p)], q1, q0]).buffer(0))
+            shape = shape.buffer(0.05).buffer(-0.05)
+            if shape.geom_type != "Polygon":
+                shape = max(shape.geoms, key=lambda g: g.area)
+            xy = np.array(shape.exterior.coords)[:-1]
+            d = "M " + " L ".join(f"{x:.3f} {y:.3f}" for x, y in xy) + " Z"
+            material = self.mesh.faces[self.seg.members(label)[0]].material
+            out.append(f'<g id="piece-{page:02d}-{n:02d}" data-piece="piece-{page:02d}-{n:02d}" '
+                       f'data-material="{material}" data-name="{self.names[label]}">'
+                       f'<path data-operation="cut" d="{d}"/></g>')
+        path.write_text('<svg xmlns="http://www.w3.org/2000/svg" data-contract="lowpoly-export/1">\n'
+                        + "\n".join(out) + "\n</svg>\n")
 
     @staticmethod
     def _flap(p0: np.ndarray, p1: np.ndarray, inside: np.ndarray, depth: float = 7.5) -> Polygon:

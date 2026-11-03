@@ -180,12 +180,18 @@ def main() -> int:
     ap.add_argument("--dart-mm", type=float, default=0.0,
                     help="a dart whose slit is narrower than this counts as a short seam (0: thin darts "
                          "are fine, e.g. taped from inside; 7.5: avoid them)")
+    ap.add_argument("--max-piece", default="", help="largest piece WxH in mm (default: one sheet less a 15 mm border)")
+    ap.add_argument("--sheet-cost", type=float, default=20.0,
+                    help="cost of one sheet's worth of bounding boxes, against 20 per piece")
     ap.add_argument("--flatten-deg", type=float, default=0.0,
                     help="geometry edit: make vertices with an angle defect under this flat (0: off)")
     ap.add_argument("--flatten-mm", type=float, default=3.0, help="... moving a vertex at most this far")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
     segment.DART_MM = args.dart_mm
+    segment.BOX_WEIGHT = args.sheet_cost / segment.SHEET_AREA
+    if args.max_piece:
+        segment.MAX_PIECE_MM = tuple(float(v) for v in args.max_piece.lower().split("x"))
     data = json.loads(args.fold3d.read_text(encoding="utf-8"))
     mesh = Mesh(data)
     mesh.symmetrize()
@@ -226,6 +232,10 @@ def main() -> int:
     rep.pieces_csv(out / f"{args.name}-pieces.csv")
     rep.seams_csv(out / f"{args.name}-seams.csv")
     rep.svg(out / f"{args.name}.svg", data.get("colours", {}))
+    rep.nest_svg(out / f"{args.name}-nest.svg")
+    pdf = Segmentation.from_pieces(mesh, region)
+    Report(mesh, pdf, {lab: mesh.faces[pdf.members(lab)[0]].piece for lab in pdf.layout}).nest_svg(
+        out / f"{args.name}-pdf-nest.svg", page=91)
     Report.preview(mesh, [("greedy", greedy), ("set partition", best)], out / f"{args.name}.png")
     print(f"wrote {out}/{args.name}-*")
     return 0
