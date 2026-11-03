@@ -6,7 +6,7 @@ Reads the folded model (data/<m>/fold3d.json, millimetres) and the YAML `fit:` b
       head: female            # child | female | male preset
       circumference_mm: 545   # optional, scales the preset
       eye_distance_mm: 61     # optional, pupil to pupil
-      clearance_mm: 10        # air between head and card
+      clearance_mm: 0         # air between head and card (it rests on the head)
       sight_hole_mm: 30       # diameter of each sight hole
       eyes: openings          # pupils centred behind the model's eye openings (or: free)
       up: +y                  # roughly up in the model's axes
@@ -82,51 +82,100 @@ class HeadSize:
         return head
 
 
-@dataclass(frozen=True)
-class Ellipsoid:
-    centre: np.ndarray      # head frame: x right, y back, z up, origin between the pupils
-    radii: np.ndarray
-
-    def surface(self, count: int) -> np.ndarray:
-        i = np.arange(count) + 0.5
-        z = 1 - 2 * i / count
-        r = np.sqrt(1 - z * z)
-        phi = i * math.pi * (3 - math.sqrt(5))
-        unit = np.column_stack([r * np.cos(phi), r * np.sin(phi), z])
-        return self.centre + unit * self.radii
-
-    def inside(self, points: np.ndarray) -> np.ndarray:
-        return (((points - self.centre) / self.radii) ** 2).sum(axis=1) < 1.0
+HEAD_MESH = Path(__file__).resolve().parents[2] / "assets" / "head" / "makehuman-head.obj"
+CIRCUMFERENCE_ABOVE_PUPILS_MM = 35.0     # where a tape goes round the head, above the brows
+NECK_BELOW_CHIN_MM = 50.0                # how much neck is kept below the chin
 
 
 class HeadModel:
-    """A head built round the pupils: cranium, face and jaw, nose."""
+    """A real head shape: the MakeHuman base mesh (CC0) from the shoulders up, scaled to the head size.
 
-    def __init__(self, size: HeadSize):
+    Head frame: x to the wearer's right, y back, z up, origin between the pupils, millimetres. The
+    mesh is scaled evenly so its circumference above the brows matches the size; a given eye
+    distance moves the pupil marks only.
+    """
+
+    def __init__(self, size: HeadSize, mesh: Path = HEAD_MESH):
         self.size = size
-        b, l, h = size.breadth, size.length, size.height
-        brow = -12.0                                     # forehead is this far in front of the pupils
-        self.cranium = Ellipsoid(np.array([0.0, brow + l / 2, 0.51 * h - 0.42 * h]),
-                                 np.array([b / 2, l / 2, 0.42 * h]))
-        self.jaw = Ellipsoid(np.array([0.0, -5.0 + 0.32 * l, -0.49 * h + 0.30 * h]),
-                             np.array([0.42 * b, 0.32 * l, 0.30 * h]))
-        self.nose = np.array([[0.0, -30.0, -40.0], [0.0, -18.0, -20.0], [0.0, -10.0, -5.0]])
-        self.pupils = np.array([[-size.eye_distance / 2, 0.0, 0.0], [size.eye_distance / 2, 0.0, 0.0]])
+        vertices, faces, pupils = self._read(mesh)
+        # MakeHuman: x to the person's left, y up, face along +z
+        turn = np.array([[-1.0, 0, 0], [0, 0, -1.0], [0, 1.0, 0]])
+        vertices, pupils = vertices @ turn.T, pupils @ turn.T
+        origin = pupils.mean(0)
+        vertices, pupils = vertices - origin, pupils - origin
+        k = size.circumference / self._circumference(vertices)
+        self.vertices = vertices * k
+        # head and neck only: the shoulders and chest stay outside the mask (the snout rests on them)
+        neck = -(0.49 * size.height + NECK_BELOW_CHIN_MM)
+        self.faces = faces[(self.vertices[faces][:, :, 2] > neck).all(axis=1)]
+        self.triangles = self.vertices[self.faces]
+        half = size.eye_distance / 2
+        self.pupils = np.array([[-half, pupils[0, 1] * k, 0.0], [half, pupils[1, 1] * k, 0.0]])
+        crown = self.vertices[:, 2].max()
+        self.core_centre = np.array([0.0, 0.25 * size.length, crown - 0.5 * size.breadth])
+        self.core_radius = 0.5 * size.breadth
 
-    def samples(self, count: int = 500) -> np.ndarray:
-        """Points on the outside of the head, head frame. The underside of the jaw behind the chin is
-        left out: the neck is there, and it runs down and back out of the mask."""
-        cranium, jaw = self.cranium.surface(count), self.jaw.surface(count)
-        c, r = self.jaw.centre, self.jaw.radii
-        throat = (jaw[:, 2] < c[2]) & (jaw[:, 1] > c[1] - 0.3 * r[1])
-        return np.vstack([cranium[~self.jaw.inside(cranium)], jaw[~self.cranium.inside(jaw) & ~throat], self.nose])
+    @staticmethod
+    def _read(path: Path):
+        vertices, faces, points = [], [], []
+        for line in path.read_text().splitlines():
+            if line.startswith("v "):
+                vertices.append([float(x) for x in line.split()[1:4]])
+            elif line.startswith("f "):
+                faces.append([int(t.split("/")[0]) - 1 for t in line.split()[1:4]])
+            elif line.startswith("p "):
+                points = [int(t) - 1 for t in line.split()[1:]]
+        vertices = np.array(vertices)
+        return vertices, np.array(faces), vertices[points]
 
-    def outline(self, view: str, steps: int = 96) -> list[np.ndarray]:
-        """Ellipse outlines for a drawing: view 'front' gives (x, z), 'side' gives (y, z)."""
-        t = np.linspace(0, 2 * math.pi, steps)
-        k = 0 if view == "front" else 1
-        return [np.column_stack([e.centre[k] + e.radii[k] * np.cos(t), e.centre[2] + e.radii[2] * np.sin(t)])
-                for e in (self.cranium, self.jaw)]
+    @staticmethod
+    def _circumference(vertices: np.ndarray) -> float:
+        ring = vertices[np.abs(vertices[:, 2] - CIRCUMFERENCE_ABOVE_PUPILS_MM) < 2.0][:, :2]
+        hull = _convex_hull(ring)
+        return float(np.linalg.norm(hull - np.roll(hull, 1, axis=0), axis=1).sum())
+
+    def tip(self, degrees: float) -> None:
+        """Tip the head about the line between the pupils."""
+        turn = _pitch(degrees)
+        self.vertices = self.vertices @ turn.T
+        self.triangles = self.vertices[self.faces]
+        self.core_centre = turn @ self.core_centre
+
+    def samples(self, spacing: float = 8.0) -> np.ndarray:
+        """Points on the skin from the shoulders up, about `spacing` mm apart."""
+        t = self.triangles
+        area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
+        count = int(area.sum() / spacing ** 2)
+        rng = np.random.default_rng(0)
+        pick = rng.choice(len(t), size=count, p=area / area.sum())
+        u, v = rng.random(count), rng.random(count)
+        flip = u + v > 1
+        u[flip], v[flip] = 1 - u[flip], 1 - v[flip]
+        tri = t[pick]
+        return tri[:, 0] + u[:, None] * (tri[:, 1] - tri[:, 0]) + v[:, None] * (tri[:, 2] - tri[:, 0])
+
+
+def _pitch(degrees: float) -> np.ndarray:
+    """Rotation about the ear-to-ear axis; positive tips the face up."""
+    a = math.radians(degrees)
+    return np.array([[1.0, 0, 0], [0, math.cos(a), math.sin(a)], [0, -math.sin(a), math.cos(a)]])
+
+
+def _convex_hull(points: np.ndarray) -> np.ndarray:
+    pts = sorted(map(tuple, points))
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+    lower, upper = [], []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return np.array(lower[:-1] + upper[:-1])
 
 
 class FoldedMask:
@@ -192,8 +241,34 @@ class FoldedMask:
         direction[0] = 0.0
         return direction
 
-    def beyond_neck(self, points: np.ndarray) -> np.ndarray:
-        return (points - self.neck_centre) @ self.neck_normal > 0
+    def neck_cap(self) -> np.ndarray:
+        """The neck opening closed by a fan of triangles round its centre (for the through-test)."""
+        if getattr(self, "_cap", None) is None:
+            loop = self.openings[0]
+            c = loop.mean(0)
+            u, v = np.linalg.svd(loop - c)[2][:2]
+            ring = loop[np.argsort(np.arctan2((loop - c) @ v, (loop - c) @ u))]
+            self._cap = np.array([[c, a, b] for a, b in zip(ring, np.roll(ring, -1, axis=0))])
+        return self._cap
+
+    def beyond_neck(self, points: np.ndarray, centre: np.ndarray | None = None) -> np.ndarray:
+        """Points that have left the mask through the neck opening: the line from `centre` (inside
+        the head) to the point crosses the opening. Without a centre, the side of its plane."""
+        if centre is None:
+            return (points - self.neck_centre) @ self.neck_normal > 0
+        cap = self.neck_cap()
+        d = points - centre                                   # segments centre -> point
+        e1, e2 = cap[:, 1] - cap[:, 0], cap[:, 2] - cap[:, 0]
+        h = np.cross(d[:, None, :], e2[None])
+        det = (e1[None] * h).sum(2)
+        inv = 1.0 / np.where(np.abs(det) < 1e-9, np.inf, det)
+        sv = centre - cap[:, 0]
+        uu = (sv[None] * h).sum(2) * inv
+        q = np.cross(sv, e1)
+        vv = (d @ q.T) * inv
+        t = (q * e2).sum(1)[None] * inv
+        hit = (uu >= 0) & (vv >= 0) & (uu + vv <= 1) & (t > 0) & (t < 1)
+        return hit.any(axis=1)
 
     def _openings(self, vertices: np.ndarray) -> list[np.ndarray]:
         """Corner points of each open loop of card edges, largest first."""
@@ -315,6 +390,7 @@ class FitResult:
     mask_size_mm: list
     eyes: str = "free"                 # "openings": pupils behind the model's eye openings
     eye_scale_range: list | None = None
+    tip_deg: float = 0.0               # head tipped this far (+ face up) to fit
     sight: list = field(default_factory=list)
 
 
@@ -329,7 +405,7 @@ class HeadFitter:
     def margin(self, scale: float, pupils: np.ndarray) -> float:
         """Least air between head and card in real mm, ignoring head that has left through the neck."""
         points = (self.samples + pupils) / scale
-        keep = ~self.mask.beyond_neck(points)
+        keep = ~self.mask.beyond_neck(points, (self.head.core_centre + pupils) / scale)
         return float((scale * self.field(points[keep])).min()) if keep.any() else -1e3
 
     def best_position(self, scale: float, step: float = 4.0) -> tuple[np.ndarray, float]:
@@ -337,8 +413,8 @@ class HeadFitter:
         ys, zs = np.arange(low[1], high[1], step), np.arange(low[2], high[2], step)
         grid = np.array([[0.0, y, z] for y in ys for z in zs])
         # the cranium centre must be at least its smallest radius plus clearance from the card
-        centre = grid + self.head.cranium.centre
-        need = (self.head.cranium.radii.min() + self.clearance) * 0.9
+        centre = grid + self.head.core_centre
+        need = (self.head.core_radius + self.clearance) * 0.9
         grid = grid[scale * self.field(centre / scale) >= need]
         if not len(grid):
             return np.zeros(3), -math.inf
@@ -353,27 +429,49 @@ class HeadFitter:
                         best, best_margin = p, m
         return best, best_margin
 
-    def fit_to_eyes(self, holes: tuple[np.ndarray, np.ndarray],
-                    edge_mm: float = 5.0) -> tuple[float, np.ndarray, float, tuple]:
-        """Scale so the eye openings sit centred over the pupils (scale = eye distance / opening
-        spacing). Returns scale, pupil midpoint (behind the openings, at the best depth), the head's
-        least clearance there (a check only: the folded model's inside is rough) and the scale range
-        that keeps each pupil at least `edge_mm` inside its opening."""
+    def fit_to_eyes(self, holes: tuple[np.ndarray, np.ndarray], edge_mm: float = 5.0,
+                    tolerance: float = 0.01) -> tuple[float, np.ndarray, float, tuple, float]:
+        """Pupils behind the eye openings, each at least `edge_mm` inside its opening: the smallest
+        scale at which the head, tipped forward or back up to 30 degrees, keeps `clearance` from the
+        card. Falls back to the largest scale the eyes allow. Returns scale, pupil midpoint, margin,
+        the scale range the eye distance allows and the head's tip (degrees, + looks up)."""
         centres = np.array([h.mean(0) for h in holes])
         half_gap = (centres[1, 0] - centres[0, 0]) / 2
         half_width = np.mean([np.ptp(h[:, 0]) for h in holes]) / 2
         ipd = self.head.size.eye_distance / 2
         lowest = (ipd + edge_mm) / (half_gap + half_width)
-        highest = (ipd - edge_mm) / (half_gap - half_width) if half_gap > half_width else math.inf
-        scale = ipd / half_gap
+        highest = (ipd - edge_mm) / (half_gap - half_width) if half_gap > half_width else 2.5
         mid = np.array([0.0, centres[:, 1].mean(), centres[:, 2].mean()])
-        best = None
-        for relief in np.arange(8.0, 40.0, 3.0):            # pupils this far behind the openings
-            p = mid * scale + np.array([0.0, relief, 0.0])
-            m = self.margin(scale, p)
-            if best is None or m > best[1]:
-                best = (p, m)
-        return scale, best[0], best[1], (lowest, highest)
+        upright = self.samples
+
+        def best(scale):
+            top = None
+            for tip in range(-30, 31, 10):
+                self.samples = upright @ _pitch(tip).T
+                for relief in np.arange(8.0, 45.0, 6.0):         # pupils this far behind the card
+                    for dz in (-8.0, 0.0, 8.0):                  # a little up or down in the opening
+                        p = mid * scale + np.array([0.0, relief, dz])
+                        m = self.margin(scale, p)
+                        if top is None or m > top[1]:
+                            top = (p, m, tip)
+            self.samples = upright
+            return top
+        p, m, tip = best(highest)
+        scale = highest
+        if m >= self.clearance:
+            low, high = lowest, highest
+            q = best(low)
+            if q[1] >= self.clearance:
+                return low, q[0], q[1], (lowest, highest), q[2]
+            while high - low > tolerance:
+                middle = (low + high) / 2
+                q = best(middle)
+                if q[1] >= self.clearance:
+                    high, (p, m, tip) = middle, q
+                else:
+                    low = middle
+            scale = high
+        return scale, p, m, (lowest, highest), tip
 
     def fit(self, low: float = 0.4, high: float = 2.5, tolerance: float = 0.01) -> tuple[float, np.ndarray, float]:
         pos, m = self.best_position(high)
@@ -433,7 +531,7 @@ class TemplateWriter:
         body = [f'<text x="12" y="14" font-size="5">Head fit: {r.head["name"]} head, mask at {s:.0%} '
                 f'(head room check: {r.tightest_mm:.0f} mm, wanted {r.clearance_mm:g})</text>',
                 f'<text x="12" y="20" font-size="3.2">Mask {r.mask_size_mm[0]:.0f} × {r.mask_size_mm[1]:.0f} × '
-                f'{r.mask_size_mm[2]:.0f} mm (wide × deep × tall). Grey: card. Blue: head. Red: pupils and sight.</text>']
+                f'{r.mask_size_mm[2]:.0f} mm (wide × deep × tall). Grey: card. Blue: head (MakeHuman, CC0). Red: pupils and sight.</text>']
         extent = tri.reshape(-1, 3)
         span = max(np.ptp(extent[:, 0]), np.ptp(extent[:, 1]), np.ptp(extent[:, 2]))
         zoom = min(180.0 / span, 125.0 / np.ptp(extent[:, 2]))
@@ -451,12 +549,13 @@ class TemplateWriter:
                 x, y = xy(tri[i])
                 body.append('<path d="M' + " L".join(f"{a:.1f},{b:.1f}" for a, b in zip(x, y)) + 'Z"/>')
             body.append("</g>")
-            for ring in self.head.outline(name):
-                p = np.zeros((len(ring), 3))
-                p[:, k], p[:, 2] = ring[:, 0], ring[:, 1]
-                x, y = xy(p + head_offset)
-                body.append('<path fill="none" stroke="#1f5fa8" stroke-width="0.5" d="M'
-                            + " L".join(f"{a:.1f},{b:.1f}" for a, b in zip(x, y)) + '"/>')
+            skin = self.head.triangles + head_offset
+            order = np.argsort(skin[:, :, depth].mean(1) * (1 if name == "front" else -1))
+            body.append('<g fill="#1f5fa8" stroke="#1f5fa8" stroke-width="0.2" opacity="0.3">')
+            for i in order:
+                x, y = xy(skin[i])
+                body.append('<path d="M' + " L".join(f"{a:.1f},{b:.1f}" for a, b in zip(x, y)) + 'Z"/>')
+            body.append("</g>")
             for pupil, sight in zip(self.head.pupils + head_offset, r.sight):
                 x, y = xy(pupil)
                 body.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="1.2" fill="#c62828"/>')
@@ -561,7 +660,7 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
     front = fit.get("front", "eyes")
     mask = FoldedMask(data, _axis(fit.get("up", "+y")), None if front == "eyes" else _axis(front))
     field_ = ClearanceField(mask)
-    clearance = float(fit.get("clearance_mm", 10.0))
+    clearance = float(fit.get("clearance_mm", 0.0))
     finder_hole = float(fit.get("sight_hole_mm", SIGHT_HOLE_MM))
     wanted = [fit] + ([{"head": n} for n in HEAD_PRESETS] if compare else [])
     results = []
@@ -570,15 +669,18 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
         fitter = HeadFitter(mask, head, clearance, field_)
         holes = mask.eye_openings() if str(fit.get("eyes", "openings")) == "openings" else None
         span = None
+        tip = 0.0
         if holes:
-            scale, pupils, margin, span = fitter.fit_to_eyes(holes)
+            scale, pupils, margin, span, tip = fitter.fit_to_eyes(holes)
+            head.tip(tip)
         else:
             scale, pupils, margin = fitter.fit()
         size = np.ptp(mask.triangles.reshape(-1, 3), axis=0) * scale
         result = FitResult(head=asdict(head.size), scale=round(scale, 3), clearance_mm=clearance,
                            pupils_mm=pupils.round(1).tolist(), tightest_mm=round(margin, 1),
                            mask_size_mm=size.round(0).tolist(), eyes="openings" if holes else "free",
-                           eye_scale_range=[round(v, 3) for v in span] if span else None)
+                           eye_scale_range=[round(v, 3) for v in span] if span else None,
+                           tip_deg=tip)
         finder = SightFinder(mask, scale, finder_hole)
         result.sight = [finder.look(p + pupils) for p in head.pupils]
         results.append(result)
