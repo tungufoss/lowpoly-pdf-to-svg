@@ -45,6 +45,26 @@
   #split button { width: 18px; height: 28px; padding: 0; font-size: 11px; line-height: 1; cursor: pointer;
     border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); }
   @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } #split { display: none; } }
+  #controls-toggle { display: none; }
+  /* Phones: the model gets the screen. The header keeps the title, Overview and find; the rest
+     folds away behind Controls, the 3D model takes most of the height and the hints go. */
+  @media (max-width: 760px) {
+    html, body { height: 100dvh; overflow: hidden; }
+    header { gap: 6px 10px; padding: 8px 12px; max-height: 60dvh; overflow: auto; }
+    header .stats#stats { flex-basis: 100%; font-size: 12px; }
+    header button, header select, header input[type="search"] { min-height: 32px; }
+    #controls-toggle { display: inline-block; margin-left: auto; }
+    header:not(.open) > :not(h1, #stats, #fit-view, #find, #controls-toggle) { display: none; }
+    header label, #inspection-legend { flex-basis: 100%; }
+    #inspection-list { max-width: 100% !important; width: 100%; }
+    #find-text { width: 9em; }
+    main { grid-template-rows: 3fr 2fr; }
+    .pane { border-right: 0; border-bottom: 1px solid var(--line); }
+    .hint { display: none; }
+    #orbit-pad { grid-template: 30px 30px / 30px 30px 30px; }
+    footer { min-height: 0; max-height: 22dvh; padding: 8px 12px; }
+    footer ul { columns: 1; }
+  }
   .pane { position: relative; min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--line); }
   #three canvas { display: block; width: 100%; height: 100%; }
   #orbit-pad { position: absolute; left: 10px; top: 10px; z-index: 2; display: grid;
@@ -120,6 +140,7 @@
   <button id="fit-view" type="button">Overview</button>
   <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477, 2T, or 11-02"
     aria-label="Find a glue number, Cricut label, or piece" title="A Cricut label or glue number finds its paired pieces; a piece id shows that piece and its twin"></form>
+  <button id="controls-toggle" type="button" aria-expanded="false">Controls</button>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
   <label>Issues <select id="inspection-list" aria-label="Needs inspection" style="max-width:38em"><option value="">Choose an issue…</option></select></label>
   <label><input id="show-confirmed" type="checkbox">Show confirmed</label>
@@ -185,6 +206,13 @@
 </div>
 
 <script type="module">
+// On a phone the header controls fold away behind one button.
+{
+  const header = document.querySelector("header"), toggle = document.getElementById("controls-toggle");
+  toggle.addEventListener("click", () => {
+    toggle.setAttribute("aria-expanded", String(header.classList.toggle("open")));
+  });
+}
 // The split between the 3D model and the pattern (where the piece editor opens): drag it, or
 // collapse either side with its buttons; the place is remembered.
 {
@@ -1485,18 +1513,43 @@ class PatternView {
       const [x, y] = this.toSvg(e), k = Math.exp(e.deltaY * 0.0015), [vx, vy, vw, vh] = this.view;
       this.setView([x - (x - vx) * k, y - (y - vy) * k, vw * k, vh * k]);
     }, { passive: false });
+    // Two fingers pinch to zoom about their midpoint; a pinch never counts as a click.
+    const touches = new Map();
+    let pinch = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()], mid = {clientX: (a.x + b.x) / 2, clientY: (a.y + b.y) / 2};
+      return { dist: Math.hypot(a.x - b.x, a.y - b.y), at: this.toSvg(mid), view: [...this.view] };
+    };
     this.el.addEventListener("pointerdown", e => {
       if (inEditor(e)) return;
-      drag = { x: e.clientX, y: e.clientY, view: [...this.view], moved: false, s: this.toSvg(e)[2] };
+      touches.set(e.pointerId, {x: e.clientX, y: e.clientY});
+      if (touches.size === 2) { pinch = pinchState(); if (drag) drag.moved = true; }
+      drag = { x: e.clientX, y: e.clientY, view: [...this.view], moved: !!pinch, s: this.toSvg(e)[2] };
       this.el.setPointerCapture(e.pointerId);
     });
     this.el.addEventListener("pointermove", e => {
+      if (touches.has(e.pointerId)) touches.set(e.pointerId, {x: e.clientX, y: e.clientY});
+      if (pinch && touches.size === 2) {
+        const [a, b] = [...touches.values()], dist = Math.hypot(a.x - b.x, a.y - b.y);
+        const k = pinch.dist / Math.max(dist, 1), [x, y] = pinch.at, [vx, vy, vw, vh] = pinch.view;
+        this.setView([x - (x - vx) * k, y - (y - vy) * k, vw * k, vh * k]);
+        return;
+      }
       if (!drag) return;
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       if (Math.hypot(dx, dy) > 4) { drag.moved = true; this.el.classList.add("dragging"); }
       if (drag.moved) this.setView([drag.view[0] - dx * drag.s, drag.view[1] - dy * drag.s, drag.view[2], drag.view[3]]);
     });
+    this.el.addEventListener("pointercancel", e => { touches.delete(e.pointerId); pinch = null; drag = null; });
     this.el.addEventListener("pointerup", e => {
+      touches.delete(e.pointerId);
+      if (pinch) {
+        // Lifting one finger of a pinch hands the pan to the finger left down.
+        pinch = null; drag = null;
+        const [rest] = [...touches.entries()];
+        if (rest) drag = { x: rest[1].x, y: rest[1].y, view: [...this.view], moved: true, s: this.toSvg({clientX: rest[1].x, clientY: rest[1].y})[2] };
+        return;
+      }
       this.el.classList.remove("dragging");
       if (drag && !drag.moved) {
         this.el.releasePointerCapture(e.pointerId);
