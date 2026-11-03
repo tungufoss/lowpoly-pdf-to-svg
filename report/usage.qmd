@@ -46,6 +46,10 @@ The numbers are text, so you can correct one by double-clicking it. For the Cric
 
 For cutting the export on a Cricut (cut plan, Design Space operations, recut), see [Cutting on a Cricut](cricut.qmd).
 
+## Re-cutting pieces from the 3D mesh (prototype)
+
+`make segment MATERIAL=green` (or `PIECES=piece-11-04,piece-11-05`, twins added) cuts those pieces again from the folded 3D model (`fold3d.json`) instead of the PDF's split. The faces are welded into one mesh, made exactly mirror-symmetric (corners move about 1 mm; `--keep-shapes` skips this), and merged greedily, both twins at once. A merge is kept only if the piece still lies flat without overlapping itself and fits A4 with room for tabs. The score counts seams shorter than one 15 mm tape strip first, then tiny pieces (under 600 mm²), then pieces, seams, cuts inside a piece and seam length. A seam is one straight run, so a zigzag of short edges counts as several seams. Colour boundaries stay seams. The PDF's pieces are scored the same way for comparison. Output goes to `data/<project>/segment/`: `<name>-{pdf,new}-pieces.csv`, `-seams.csv` (length, short flag and load from `stress.py`), `-{pdf,new}.svg` (each piece flat: cuts solid, folds dashed, cuts inside a piece red) and `<name>.png` (both in 3D). `RESTARTS=n` adds randomised runs. Bowser's green goes from 26 pieces with 11 short seams to 10 pieces with 2 (both at the eyebrow, a colour boundary). The result is not yet wired into the export (issue #68).
+
 ## 3D viewer and Piece Review {#viewer}
 
 `app/fold3d-viewer.html` shows the folded model (`fold3d.json`) beside the flat pattern; picking a face in 3D shows that piece, cropped from its page when scans are available, and picking a piece in 2D lights up its faces. The models repository serves it with `make review MODEL=<model>` (local, with saving) and puts a read-only copy on its unlisted site with `make site`.
