@@ -59,7 +59,7 @@ fix:
 
 export: $(OUT)/$(PROJECT)-export.svg
 
-$(OUT)/$(PROJECT)-export.svg: $(OUT)/$(PROJECT).svg $(CONFIG) src/lowpoly_pdf_to_svg/export.py
+$(OUT)/$(PROJECT)-export.svg: $(OUT)/$(PROJECT).svg $(CONFIG) src/lowpoly_pdf_to_svg/export.py src/lowpoly_pdf_to_svg/retab.py
 	$(PYTHON) -m src.lowpoly_pdf_to_svg.export --config $(CONFIG) --output $(OUT)
 
 export-check:

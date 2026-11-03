@@ -35,6 +35,8 @@ website:
         href: install.qmd
       - text: Guide
         href: usage.qmd
+      - text: Cricut
+        href: cricut.qmd
       - text: Method
         href: method.qmd
       - text: Results

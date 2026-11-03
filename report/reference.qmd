@@ -53,6 +53,19 @@ materials:                 # one entry per cardstock colour
     name: Brown cardstock
     pieces: [piece-04-06, piece-05-06]   # cut from brown although page 4 and 5 are red
 
+tabs:                      # optional: glue tabs generated at export (default on)
+  depth_mm: 7              # tab depth from its fold (the PDF's are about 5.6 mm)
+  flap_mm: 20              # square flap size; 0 for none
+  flap_area_mm2: 5000      # seams between two pieces this big get a flap on their longest glue
+  flap_edge_mm: 25         # ... when that glue is at least this long
+  stress_top: 0.1          # share of seams with the most load in fold3d.json that get a flap; 0 for none
+  flaps: [piece-07-03, 412]  # stress points (piece ids or PDF numbers), twins follow
+  angle_deg: 45            # slope of the tab ends
+  margin_mm: 0.8           # clearance from the partner face's folds and cuts
+  gap_mm: 1                # clearance between two tabs of one piece
+  keep: [green]            # materials already cut: keep their traced tabs
+# tabs: false              # keep the PDF's traced tabs everywhere
+
 reference:                 # optional: the finished model, checked by the 3D fold
   parts: 1                 # glues into one piece
   openings: 4              # holes left open (e.g. two eyes, mouth, neck)
@@ -118,6 +131,12 @@ every unit takes about 4.5 minutes, and a run after a one-unit edit takes about 
 | `--anneal` | `5` | Cycles of hard then easy fold pull after the build |
 | `--cold` | off | Ignore saved poses and caches and place every piece from scratch (`COLD=1` in Make) |
 | `--rejoin` | off | Let the join move every unit, not only the units changed since the saved pose (`REJOIN=1` in Make) |
+
+Mirror twins (pieces whose faces mirror each other) are pulled towards mirrored poses while the
+glue settles. Twins still far from mirrored after that are snapped: the side with more open glues
+is laid exactly onto the mirror image of the other, worst pair first, and the glue settles again
+(`mirror snap` in the log). A flap whose sides match a tab on its twin is marked as a tab too, so twins keep the same surface
+(the traced shape is not changed).
 
 ### Modular glue plan
 

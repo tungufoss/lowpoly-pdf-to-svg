@@ -36,6 +36,8 @@ from pathlib import Path
 
 import yaml
 
+from .retab import Retabber, TabStyle
+
 SVG, INKSCAPE = "http://www.w3.org/2000/svg", "http://www.inkscape.org/namespaces/inkscape"
 for prefix, uri in (("", SVG), ("xlink", "http://www.w3.org/1999/xlink"), ("inkscape", INKSCAPE),
                     ("sodipodi", "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd")):
@@ -257,9 +259,10 @@ class ExportWriter:
         self.number_size = number_size
         self.piece_positions = piece_positions or {}
 
-    def export(self, source: Path, target: Path) -> dict[str, int]:
+    def export(self, source: Path, target: Path, retab: "Retabber | None" = None) -> dict[str, int]:
         tree = ET.parse(source)
         root = tree.getroot()
+        tabs = retab.apply(root, self.pairs) if retab else {}
         for layer in [g for g in root.findall(f"{{{SVG}}}g") if g.get("id") in ("source", "review")]:
             root.remove(layer)
         title = root.find(f"{{{SVG}}}title")
@@ -324,8 +327,8 @@ class ExportWriter:
         ET.indent(tree, space="")
         target.parent.mkdir(parents=True, exist_ok=True)
         tree.write(target, encoding="UTF-8", xml_declaration=True)
-        return {"pieces": len(pieces), "labels": len(texts),
-                "pairs": len({pair.label for _, pair in texts}),
+        return {"pieces": len(pieces), "labels": len(texts), "tabs": tabs,
+                "pairs": len({id(pair) for _, pair in texts}),
                 "longest": max((len(pair.label) for _, pair in texts), default=0)}
 
     def _describe(self, piece: ET.Element, page: int, ox: float, oy: float) -> None:
@@ -725,6 +728,7 @@ def main() -> int:
     parser.add_argument("--check", type=Path, metavar="EXPORT", help="only check an export SVG against the contract")
     parser.add_argument("--label-size", type=float, default=5.0, help="edge-label font size, mm (default 5)")
     parser.add_argument("--number-size", type=float, default=10.0, help="largest piece-number font size, mm (default 10)")
+    parser.add_argument("--traced-tabs", action="store_true", help="keep the PDF's glue tabs (no generated tabs)")
     args = parser.parse_args()
     if args.check:
         problems = ExportContract(args.check).errors()
@@ -739,14 +743,19 @@ def main() -> int:
     pairs = GluePairs.read(edges)
     target = folder / f"{project}-export.svg"
     twins = PieceNumbers.read_twins(folder / "mirror-mismatches.csv")
+    style = TabStyle.from_config(yaml.safe_load(args.config.read_text(encoding="utf-8")).get("tabs"))
+    retab = (Retabber(style, folder / "mirror-mismatches.csv", folder / "fold3d.json")
+             if style and not args.traced_tabs else None)
     counts = ExportWriter(pairs, Materials(args.config), twins=twins, label_size=args.label_size,
                           number_size=args.number_size,
-                          piece_positions=PieceNumbers.read_positions(folder / 'fold3d.json')).export(source, target)
+                          piece_positions=PieceNumbers.read_positions(folder / 'fold3d.json')).export(source, target, retab)
     pairs.write(folder / f"{project}-labels.csv")
     problems = ExportContract(target).errors()
     print(f"{target}: {counts['pieces']} pieces filled, {counts['labels']} numbers -> "
           f"{counts['pairs']} labels of at most {counts['longest']} characters; "
           f"key in {folder / f'{project}-labels.csv'}")
+    if counts["tabs"]:
+        print("tabs: " + ", ".join(f"{v} {k}" for k, v in counts["tabs"].items()))
     for problem in problems:
         print(f"contract: {problem}", file=sys.stderr)
     return 1 if problems else 0
