@@ -20,6 +20,7 @@ pip licence takes 2000 variables, enough for the nose; bigger regions need a ful
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import time
@@ -27,7 +28,8 @@ from pathlib import Path
 
 import numpy as np
 
-from .segment import (STRAIGHT_DEG, TAPE_MM, TINY_MM2, Layout, Mesh, Report, Segmentation,
+from . import segment
+from .segment import (HINGE_MM, STRAIGHT_DEG, TAPE_MM, TINY_MM2, Layout, Mesh, Report, Segmentation,
                       Segmenter, _names)
 
 
@@ -112,8 +114,12 @@ class PartitionModel:
                 edge = frozenset((a, b))
                 (f, _), (g, _) = (self.mesh.edge_faces[edge] + [(None, None)])[:2]
                 other = g if f == i else f
-                if edge in self.edge_cost and other in faces and i < other and lay.is_fold(edge, i, other):
-                    c -= self.edge_cost[edge]
+                if edge in self.edge_cost and other in faces and i < other:
+                    gap = lay.gap(edge, i, other)
+                    if gap <= HINGE_MM:
+                        c -= self.edge_cost[edge]        # folded: no seam
+                    elif gap < segment.DART_MM:
+                        c += 100                         # a dart too thin to glue
         return c
 
     def solve(self, solver: str = "highs", time_limit: float = 120.0) -> list[Layout]:
@@ -171,8 +177,15 @@ def main() -> int:
     ap.add_argument("--grow", type=int, default=1, help="rounds of growing pool pieces by one face")
     ap.add_argument("--solver", choices=["highs", "gurobi"], default="highs")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--dart-mm", type=float, default=0.0,
+                    help="a dart whose slit is narrower than this counts as a short seam (0: thin darts "
+                         "are fine, e.g. taped from inside; 7.5: avoid them)")
+    ap.add_argument("--flatten-deg", type=float, default=0.0,
+                    help="geometry edit: make vertices with an angle defect under this flat (0: off)")
+    ap.add_argument("--flatten-mm", type=float, default=3.0, help="... moving a vertex at most this far")
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
+    segment.DART_MM = args.dart_mm
     data = json.loads(args.fold3d.read_text(encoding="utf-8"))
     mesh = Mesh(data)
     mesh.symmetrize()
@@ -184,6 +197,14 @@ def main() -> int:
         ap.error("no faces: give --pieces or --material")
     out = args.out or args.fold3d.parent / "segment"
     out.mkdir(parents=True, exist_ok=True)
+    if args.flatten_deg > 0:
+        edits = mesh.flatten_vertices(region, args.flatten_deg, args.flatten_mm)
+        with (out / f"{args.name}-flattened.csv").open("w", newline="") as fh:
+            w = csv.DictWriter(fh, ["vertex", "defect_deg", "moved_mm"])
+            w.writeheader()
+            w.writerows(edits)
+        print(f"flattened {len(edits)} nearly flat vertices, moved up to "
+              f"{max([e['moved_mm'] for e in edits], default=0):.1f} mm")
 
     t = time.time()
     pool = CandidatePool(mesh, region)

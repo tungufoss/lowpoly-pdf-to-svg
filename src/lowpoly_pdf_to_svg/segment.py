@@ -39,6 +39,7 @@ HINGE_MM = 0.5        # two faces' copies of an edge this close in the layout: a
 OVERLAP_MM2 = 2.0     # overlap allowed in a layout (rounding between faces' flat shapes)
 STRAIGHT_DEG = 15.0  # a seam bending more than this starts a new run: a new tab and tape strip
 MIRROR_MM = 10.0      # a face's mirror: the face nearest its reflection, both ways, within this
+DART_MM = 0.0         # a dart's slit narrower than this counts as a short seam (partition.py --dart-mm)
 TINY_MM2 = 600.0     # a piece smaller than this (about 25 x 25 mm) is fiddly to fold and glue
 SHEET_MM = (180.0, 267.0)   # A4 less a 15 mm border for tabs and the cutting mat's grip
 
@@ -121,6 +122,70 @@ class Mesh:
         for i, j in cKDTree(points).query_pairs(CLUSTER_MM):
             parent[find(i)] = find(j)
         return [find(i) for i in range(len(points))]
+
+    def defect(self, v: int) -> float | None:
+        """Angle defect at vertex v, degrees (360 less the face angles round it); None on
+        the rim. Near 0 the paper round v is almost flat, and a dart there is a thin slit."""
+        total = 0.0
+        for i, f in enumerate(self.faces):
+            if v in f.corners:
+                k, n = f.corners.index(v), len(f.corners)
+                a = self.points[f.corners[k - 1]] - self.points[v]
+                b = self.points[f.corners[(k + 1) % n]] - self.points[v]
+                total += math.degrees(math.acos(np.clip(a @ b / (np.linalg.norm(a) * np.linalg.norm(b)), -1, 1)))
+        return 360.0 - total
+
+    def interior(self, v: int) -> bool:
+        edges = [e for e in self.edge_faces if v in e]
+        return bool(edges) and all(len(self.edge_faces[e]) == 2 for e in edges)
+
+    def flatten_vertices(self, faces: set[int], max_deg: float = 6.0, max_mm: float = 3.0) -> list[dict]:
+        """Geometry edit: push each nearly flat vertex of these faces (defect under
+        `max_deg`) along its normal until the paper round it is flat, if that takes no more
+        than `max_mm`; its mirror twin moves the same way. A flat vertex needs no dart, so
+        the pieces round it fold without a slit. Returns one row per vertex moved."""
+        verts = sorted({v for i in faces for v in self.faces[i].corners})
+        done, rows = set(), []
+        for v in verts:
+            if v in done or not self.interior(v):
+                continue
+            d0 = self.defect(v)
+            if abs(d0) < 0.2 or abs(d0) > max_deg:
+                continue
+            ring = [i for i, f in enumerate(self.faces) if v in f.corners]
+            normal = sum(np.cross(*(self.points[self.faces[i].corners[1:3]] - self.points[self.faces[i].corners[0]]))
+                         for i in ring)
+            normal /= np.linalg.norm(normal) or 1.0
+            start = self.points[v].copy()
+
+            def at(t):
+                self.points[v] = start + t * normal
+                return self.defect(v)
+            lo, hi = -max_mm, max_mm
+            f_lo, f_hi = at(lo), at(hi)
+            if f_lo * f_hi > 0:
+                self.points[v] = start
+                continue
+            for _ in range(40):
+                mid = (lo + hi) / 2
+                f_mid = at(mid)
+                if f_lo * f_mid <= 0:
+                    hi, f_hi = mid, f_mid
+                else:
+                    lo, f_lo = mid, f_mid
+            t = (lo + hi) / 2
+            at(t)
+            m = self.mirror_vertex.get(v)
+            if m is not None and m != v:
+                self.points[m] = self.flip(self.points[v])
+                done.add(m)
+            elif m == v:
+                self.points[v][0] = self.mid      # on the centre line: stay on it
+            done.add(v)
+            rows.append({"vertex": v, "defect_deg": round(d0, 2), "moved_mm": round(abs(t), 2)})
+        for f in self.faces:
+            f.flat = _flatten(self.points[f.corners], f.flat)
+        return rows
 
     def centre(self, i: int) -> np.ndarray:
         return self.points[self.faces[i].corners].mean(axis=0)
@@ -219,8 +284,13 @@ class Layout:
     def area(self) -> float:
         return sum(abs(_shoelace(p)) for p in self.placed.values())
 
+    def gap(self, edge: frozenset, i: int, j: int) -> float:
+        """How far apart the two copies of an edge lie in the layout: 0 on a fold, the
+        width of the slit's mouth on a dart."""
+        return max(float(np.linalg.norm(self.corner(i, v) - self.corner(j, v))) for v in edge)
+
     def is_fold(self, edge: frozenset, i: int, j: int) -> bool:
-        return all(np.linalg.norm(self.corner(i, v) - self.corner(j, v)) <= HINGE_MM for v in edge)
+        return self.gap(edge, i, j) <= HINGE_MM
 
 
 class Segmentation:
@@ -331,6 +401,13 @@ class Segmentation:
                              "length_mm": sum(self.mesh.length(e) for e in run)})
         return runs
 
+    def _thin(self, run: dict) -> bool:
+        """A dart whose slit is narrower than a tab: its glue flap is too thin to hold."""
+        if len(run["pieces"]) != 1:
+            return False
+        lay = self.layout[run["pieces"][0]]
+        return max(lay.gap(e, *[f for f, _ in self.mesh.edge_faces[e][:2]]) for e in run["edges"]) < DART_MM
+
     def _straight(self, run: list[frozenset], e: frozenset) -> bool:
         """`e` continues the run in a straight line (one tab, one tape strip)."""
         for r in run:
@@ -344,7 +421,7 @@ class Segmentation:
 
     def score(self) -> tuple[float, dict]:
         runs = self.seams()
-        short = sum(r["length_mm"] < TAPE_MM for r in runs)
+        short = sum(r["length_mm"] < TAPE_MM or self._thin(r) for r in runs)
         darts = sum(len(r["pieces"]) == 1 for r in runs)
         labels = {self.piece[i] for i in self.region}
         tiny = sum(self.layout[lab].area() < TINY_MM2 for lab in labels)
