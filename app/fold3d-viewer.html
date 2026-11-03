@@ -45,26 +45,6 @@
   #split button { width: 18px; height: 28px; padding: 0; font-size: 11px; line-height: 1; cursor: pointer;
     border: 1px solid var(--line); border-radius: 4px; background: var(--panel); color: var(--ink); }
   @media (max-width: 760px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } #split { display: none; } }
-  #controls-toggle { display: none; }
-  /* Phones: the model gets the screen. The header keeps the title, Overview and find; the rest
-     folds away behind Controls, the 3D model takes most of the height and the hints go. */
-  @media (max-width: 760px) {
-    html, body { height: 100dvh; overflow: hidden; }
-    header { gap: 6px 10px; padding: 8px 12px; max-height: 60dvh; overflow: auto; }
-    header .stats#stats { flex-basis: 100%; font-size: 12px; }
-    header button, header select, header input[type="search"] { min-height: 32px; }
-    #controls-toggle { display: inline-block; margin-left: auto; }
-    header:not(.open) > :not(h1, #stats, #fit-view, #find, #controls-toggle) { display: none; }
-    header label, #inspection-legend { flex-basis: 100%; }
-    #inspection-list { max-width: 100% !important; width: 100%; }
-    #find-text { width: 9em; }
-    main { grid-template-rows: 3fr 2fr; }
-    .pane { border-right: 0; border-bottom: 1px solid var(--line); }
-    .hint { display: none; }
-    #orbit-pad { grid-template: 30px 30px / 30px 30px 30px; }
-    footer { min-height: 0; max-height: 22dvh; padding: 8px 12px; }
-    footer ul { columns: 1; }
-  }
   .pane { position: relative; min-height: 0; min-width: 0; overflow: hidden; border-right: 1px solid var(--line); }
   #three canvas { display: block; width: 100%; height: 100%; }
   #orbit-pad { position: absolute; left: 10px; top: 10px; z-index: 2; display: grid;
@@ -125,6 +105,32 @@
   footer ul { margin: 4px 0 0; padding-left: 18px; columns: 2 260px; }
   .open { color: var(--open); } .wrong { color: var(--wrong); }
   #error { color: var(--open); padding: 16px; }
+  #controls-toggle { display: none; }
+  /* Phones: the model gets the screen. The header keeps the title, Overview and find; the rest
+     folds away behind Controls, the 3D model takes most of the height and the hints go. */
+  @media (max-width: 760px) {
+    html, body { height: 100dvh; overflow: hidden; }
+    header { gap: 6px 10px; padding: 8px 12px; max-height: 60dvh; overflow: auto; }
+    header .stats#stats { flex-basis: 100%; font-size: 12px; }
+    header button, header select, header input[type="search"] { min-height: 32px; }
+    #controls-toggle { display: inline-block; margin-left: auto; }
+    header:not(.expanded) > :not(h1, #stats, #fit-view, #find, #controls-toggle) { display: none; }
+    header label, #inspection-legend { flex-basis: 100%; }
+    #inspection-list { max-width: 100% !important; width: 100%; }
+    /* 16px keeps iOS Safari from zooming the page when the box takes focus. */
+    #find-text { width: 8.5em; font-size: 16px; padding: 2px 6px; }
+    main { grid-template-rows: 3fr 2fr; }
+    .pane { border-right: 0; border-bottom: 1px solid var(--line); }
+    .hint, #orbit-pad { display: none; }
+    /* The face details shrink to their heading line; tap it to open the glue list. */
+    footer { min-height: 0; max-height: 40dvh; padding: 6px 12px; font-size: 12px; cursor: pointer; }
+    footer h2 { font-size: 13px; margin: 0; }
+    footer h2::after { content: " ▸"; color: var(--muted); }
+    footer.expanded h2::after { content: " ▾"; }
+    footer:not(.expanded) > :not(h2) { display: none; }
+    footer:not(.expanded):not(:has(h2)) > .note { display: inline; }
+    footer ul { columns: 1; margin-top: 2px; }
+  }
 </style>
 <script type="importmap">
 { "imports": {
@@ -210,8 +216,10 @@
 {
   const header = document.querySelector("header"), toggle = document.getElementById("controls-toggle");
   toggle.addEventListener("click", () => {
-    toggle.setAttribute("aria-expanded", String(header.classList.toggle("open")));
+    toggle.setAttribute("aria-expanded", String(header.classList.toggle("expanded")));
   });
+  const info = document.getElementById("info");
+  info.addEventListener("click", e => { if (!e.target.closest("a, button, input, select")) info.classList.toggle("expanded"); });
 }
 // The split between the 3D model and the pattern (where the piece editor opens): drag it, or
 // collapse either side with its buttons; the place is remembered.
