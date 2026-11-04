@@ -70,7 +70,7 @@ Silhouette, Brother ScanNCut) that can cut, score and draw on cardstock, but the
 still a picture: the machine cannot use it until someone traces it, and the template's design
 choices, made for hand cutting, stay in place.
 
-This paper is a case study of that gap. One of us downloaded a designer's template for a low-poly
+This paper is a case study of that gap. The author downloaded a designer's template for a low-poly
 mask of Bowser, the villain of Nintendo's *Super Mario* games, and built it with a Cricut. The
 template is by Papercraft Cat (© 2017 Remy Del Toro) and is free for personal use: a 24-page US
 Letter PDF with 21 sheets of pieces. Bowser is a character and
@@ -211,17 +211,23 @@ local Three.js viewer in which the builder can click a piece in 3D and see it on
 and vice versa, filter by cardstock, search by number, and switch the labels between the PDF
 numbers and the new short labels (@fig-viewer).
 
-![The interactive viewer. Left: the folded model in its cardstock colours, with the MakeHuman head and torso inside for scale. Right: the flat pieces on their sheets; clicking a face in one view selects it in the other. The toolbar filters by cardstock, finds a number, switches between PDF numbers and Cricut labels, and runs the Assemble player. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/viewer.jpg){#fig-viewer}
+![The interactive viewer. Left: the folded model in its cardstock colours. Right: the flat pieces on their 21 sheets, in the template's page order, five sheets to a row; clicking a face in one view selects it in the other. The toolbar filters by cardstock, finds a number, switches between PDF numbers and Cricut labels, and runs the Assemble player. Mask: Papercraft Cat, © 2017 Remy Del Toro.](figures/viewer.jpg){#fig-viewer}
 
 ## Fitting the mask to a head
 
-At 100 % the mask is far larger than a head (@fig-worn). The folded mesh makes the size a choice:
-a head model (MakeHuman base mesh, child, female or male, set in the YAML) is placed upright with
-its pupils behind the mask's eye openings, and the smallest scale at which the head fits is
-reported, together with where to cut sight holes (@fig-headfit). For Bowser the fits are about
-74 % (female), 77 % (male) and 67 % (child) *(check)*.
+How large should the mask be? The folded mesh makes the size a choice. A head model (MakeHuman
+base mesh, child, female or male, set in the YAML) stands upright inside the mask with its face
+behind the eye openings, and the rule is simple: the whole head must be inside the card. The
+pipeline finds the smallest scale at which it is, letting the mask rest as low as it can, on the
+crown of the head or on the shoulders, whichever it meets first (the card may press at most 5 mm
+into the shoulders). For Bowser this gives 102 % (female), 109 % (male) and 93 % (child) *(check)*,
+so the template's printed size is about right, which is consistent with the full-size mask worn by a man
+of about 1.95 m (@fig-worn). Placing the eye openings exactly over the pupils would need about
+74 % for a female head, but the crown would then come up through the top of the mask. At the
+fitted size the pupils sit below Bowser's eye openings, so the pipeline also reports where each
+line of sight meets the card, which is where a small sight hole is cut (@fig-headfit).
 
-![Head fit for a female head: the mask at 74 %, front and side views. Grey: cardstock; blue: head; red: pupils and line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
+![Head fit for a female head: the mask at 102 %, the smallest size with the whole head inside; the mask rests on the crown. Front and side views. Grey: cardstock; blue: head; red: pupils and line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
 
 
 ## Re-segmentation with darts
