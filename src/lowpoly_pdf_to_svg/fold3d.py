@@ -813,6 +813,22 @@ MATERIAL_RGB = {"red": (0.78, 0.16, 0.16), "green": (0.18, 0.49, 0.20), "yellow"
                 "orange": (0.94, 0.42, 0.0)}
 
 
+def _colours(config: Path) -> dict:
+    """Viewer colours: the defaults, then the YAML palette and material colours (lowpoly #88).
+    The recolour.csv rows ride along under "_recolour" for the caller to apply."""
+    colours = {m: "#%02x%02x%02x" % tuple(int(255 * c) for c in rgb) for m, rgb in MATERIAL_RGB.items()}
+    if config.is_file():
+        from .config import Project
+        try:
+            project = Project.load(config)
+        except ValueError as error:
+            print(f"warning: colours from the defaults only: {error}")
+            return colours
+        colours.update(project.colours())
+        colours["_recolour"] = dict(project.recolour)
+    return colours
+
+
 # -- feeding the folded shape back to the flat pieces ------------------------------
 
 class CornerAdjuster:
@@ -2020,7 +2036,11 @@ class Reconstruction:
                            for pid, piece in self.asm.pieces.items()},
                 "faces": faces, "glues": glues,
                 "wrong_folds": [[int(h[0]), int(h[1])] for h in self.solver.hinge[wrong]],
-                "colours": {m: "#%02x%02x%02x" % tuple(int(255 * c) for c in rgb) for m, rgb in MATERIAL_RGB.items()}}
+                "colours": _colours(self.svg.with_suffix(".yaml"))}
+        # recolour.csv (the viewer's Recolour mode) shows without a new fold
+        for pid, material in data["colours"].pop("_recolour", {}).items():
+            if pid in data["pieces"]:
+                data["pieces"][pid]["material"] = material
         from .inspection import inspection_targets
         targets = inspection_targets(data)
         for pid, marks in targets.items():

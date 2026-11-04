@@ -53,10 +53,17 @@
   #orbit-pad button { border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--panel) 88%, transparent);
     color: var(--ink); font: 18px/1 system-ui, sans-serif; cursor: pointer; }
   #orbit-pad button:hover { background: var(--panel); }
-  #pair-bar, #build-bar { grid-row: 2; display: flex; flex-wrap: wrap;
+  #pair-bar, #build-bar, #recolour-bar { grid-row: 2; display: flex; flex-wrap: wrap;
     align-items: center; gap: 6px 8px; padding: 6px 16px; border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--panel) 92%, transparent); color: var(--ink); }
-  #pair-bar[hidden], #build-bar[hidden] { display: none; }
+  #pair-bar[hidden], #build-bar[hidden], #recolour-bar[hidden] { display: none; }
+  #recolour-bar button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
+    background: var(--panel); color: var(--ink); cursor: pointer; }
+  #recolour-swatches { display: flex; flex-wrap: wrap; gap: 4px; }
+  #recolour-swatches button { display: inline-flex; align-items: center; gap: 5px; }
+  #recolour-swatches button[aria-pressed="true"] { outline: 2px solid var(--pick); outline-offset: 1px; }
+  #recolour-swatches i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #0006; display: inline-block; }
+  #recolour-status { flex: 1 1 200px; }
   #build-bar button { min-width: 2.6em; }
   #pair-bar button, #build-bar button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
     background: var(--panel); color: var(--ink); cursor: pointer; }
@@ -154,6 +161,7 @@
     aria-label="Find a glue number, Cricut label, or piece" title="A Cricut label or glue number finds its paired pieces; a piece id shows that piece and its twin"></form>
   <button id="controls-toggle" type="button" aria-expanded="false">Controls</button>
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
+  <button id="recolour-open" type="button" title="Pick a cardstock colour, then click pieces to cut them from it (saved to recolour.csv)">Recolour</button>
   <label>Issues <select id="inspection-list" aria-label="Needs inspection" style="max-width:38em"><option value="">Choose an issue…</option></select></label>
   <label><input id="show-confirmed" type="checkbox">Show confirmed</label>
   <span id="inspection-legend" style="font-size:0.85em"><span style="color:#ff8585">● Error: confirmed conflict</span> · <span style="color:#ffd166">● Needs checking: uncertain</span> · <span style="color:#8bdd9b">● Confirmed: accepted</span> · Blue marks show the affected geometry</span>
@@ -188,6 +196,14 @@
   <button type="button" data-build="last" aria-label="Last step" title="Last step (End)">⏭</button>
   <span id="build-label" aria-live="polite"></span>
   <button type="button" id="build-close" aria-label="Stop assembling">✕</button>
+</div>
+<div id="recolour-bar" role="toolbar" aria-label="Recolour pieces" hidden>
+  <span id="recolour-swatches" role="group" aria-label="Cardstock colours"></span>
+  <label title="A mirror twin takes the same colour"><input type="checkbox" id="recolour-twin" checked> with twin</label>
+  <button type="button" id="recolour-undo" title="Undo the last recolour (Ctrl+Z)">Undo</button>
+  <span id="recolour-status" aria-live="polite"></span>
+  <button type="button" id="recolour-save" title="Save recolour.csv (review server) or download it">Save</button>
+  <button type="button" id="recolour-close" aria-label="Stop recolouring">✕</button>
 </div>
 <main>
   <div class="pane" id="three">
@@ -722,7 +738,9 @@ class FoldedView {
   buildMesh() {
     const { vertices: V, faces, pieces, colours } = this.model;
     const pos = [], col = []; this.triFace = [];
-    const materials = [...new Set(Object.values(pieces).map(p => p.material))].sort();
+    // Every palette colour gets a slot too, so the Recolour mode can move a piece onto one not used yet.
+    const materials = [...new Set([...Object.values(pieces).map(p => p.material),
+      ...Object.keys(colours || {}).filter(name => !name.startsWith("_"))])].sort();
     this.materialNames = materials;
     this.materialIndex = new Map(materials.map((name, i) => [name, i]));
     faces.forEach((f, i) => {
@@ -1631,7 +1649,7 @@ class Viewer {
     this.model = model;
     this.edgeRows = edgeRows; this.edgeChecksAvailable = edgeChecksAvailable;
     this.cricutRows = cricutRows;
-    const pick = (face, from) => this.select(face, from);
+    const pick = (face, from) => this.recolouring ? this.recolourFace(face) : this.select(face, from);
     const contextMenu = (face, x, y) => this.showFaceMenu(face, x, y);
     this.folded = new FoldedView(document.getElementById("three"), model, labels, pick, contextMenu);
     this.pattern = new PatternView(document.getElementById("pattern"), model, svgText, pick, contextMenu);
@@ -1744,6 +1762,7 @@ class Viewer {
     this.editorFrame = document.getElementById("piece-editor-frame");
     this.reviewOrigin = `${location.protocol}//${location.hostname}:${params.get("reviewPort") || "8765"}`;
     this.listenRecut();
+    this.setupRecolour();
     document.getElementById("close-piece-editor").addEventListener("click", () => this.closePieceEditor());
     this.editor.addEventListener("click", e => { if (e.target === this.editor) this.closePieceEditor(); });
     document.addEventListener("keydown", e => { if (e.key === "Escape" && !this.editor.hidden) this.closePieceEditor(); });
@@ -2108,6 +2127,112 @@ class Viewer {
     try { await this.saveRecut(); status.textContent = `${this.model.recut.size} piece(s) marked for recut (saved to recut.txt).`; }
     catch { status.textContent = "Recut marks saved in this browser only; start the review server (make review) to save recut.txt."; }
   }
+  // Recolour (lowpoly #88): pick a cardstock colour, click pieces (twins follow). The changes are
+  // data/<model>/recolour.csv (piece,material), read by the trace, export and nest: a recolour is an
+  // edit and a re-nest (make recolour MODEL=<m>), no retrace and no new fold.
+  async setupRecolour() {
+    const bar = document.getElementById("recolour-bar"), swatches = document.getElementById("recolour-swatches");
+    this.recolourKey = `fold3d-recolour:${jsonUrl}`;
+    this.recolourRows = {}; this.recolourHistory = [];
+    this.originalMaterial = Object.fromEntries(Object.entries(this.model.pieces).map(([id, p]) => [id, p.material]));
+    let saved = null;
+    try {
+      const response = await fetch(`${this.reviewOrigin}/api/recolour?model=${encodeURIComponent(modelName)}`);
+      if (response.ok) { saved = (await response.json()).pieces; this.recolourServer = true; }
+    } catch { /* no review server: browser storage and a download */ }
+    if (!saved) try { saved = JSON.parse(localStorage.getItem(this.recolourKey) || "null"); } catch { saved = null; }
+    for (const [piece, material] of Object.entries(saved || {}))
+      if (this.model.pieces[piece] && this.folded.materialIndex.has(material)) this.recolourPiece(piece, material);
+    this.recolourPaint();
+    const names = this.folded.materialNames;
+    this.recolourChoice = names.includes("red") ? "red" : names[0];
+    const used = new Set(Object.values(this.model.pieces).map(p => p.material));
+    for (const name of names) {
+      const b = document.createElement("button"); b.type = "button"; b.dataset.material = name;
+      const chip = document.createElement("i"); chip.style.background = this.model.colours[name] || "#b3b3b3";
+      b.append(chip, name[0].toUpperCase() + name.slice(1).replace(/_/g, " "));
+      b.title = used.has(name) ? `${name} cardstock` : `${name}: palette colour not used yet`;
+      b.addEventListener("click", () => this.chooseRecolour(name));
+      swatches.append(b);
+    }
+    this.chooseRecolour(this.recolourChoice);
+    document.getElementById("recolour-open").addEventListener("click", () => {
+      this.recolouring = bar.hidden; bar.hidden = !this.recolouring;
+      if (this.recolouring) {
+        for (const id of ["pair-bar", "build-bar"]) document.getElementById(id).hidden = true;
+        this.recolourStatus();
+      }
+    });
+    document.getElementById("recolour-close").addEventListener("click", () => { this.recolouring = false; bar.hidden = true; });
+    document.getElementById("recolour-undo").addEventListener("click", () => this.undoRecolour());
+    document.addEventListener("keydown", e => {
+      if (this.recolouring && (e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); this.undoRecolour(); }
+    });
+    document.getElementById("recolour-save").addEventListener("click", () => this.saveRecolour());
+  }
+  chooseRecolour(name) {
+    this.recolourChoice = name;
+    document.querySelectorAll("#recolour-swatches button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.material === name)));
+    this.recolourStatus();
+  }
+  recolourPiece(piece, material) {
+    const before = this.model.pieces[piece].material;
+    if (before === material) return null;
+    this.model.pieces[piece].material = material;
+    if (material === this.originalMaterial[piece]) delete this.recolourRows[piece];
+    else this.recolourRows[piece] = material;
+    const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3");
+    for (const face of this.model.facesOf.get(piece) || []) this.folded.base[face] = colour.clone();
+    return before;
+  }
+  recolourPaint() {
+    this.folded.setMaterialFilter(this.folded.currentMaterialFilter || "");
+    this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
+    this.pattern.paint(this.pattern.selectedPiece, this.pattern.selectedFace);
+  }
+  recolourFace(face) {
+    const piece = this.model.faces[face].piece, twin = this.model.pieces[piece].twin;
+    const targets = [piece, ...(document.getElementById("recolour-twin").checked && twin && this.model.pieces[twin] ? [twin] : [])];
+    // one click is one undo step: the pieces it changed and their colours before
+    const batch = targets.map(id => [id, this.recolourPiece(id, this.recolourChoice)]).filter(([, before]) => before !== null);
+    if (batch.length) this.recolourHistory.push(batch);
+    this.recolourChanged(`${targets.join(" + ")} → ${this.recolourChoice}`);
+  }
+  undoRecolour() {
+    const batch = this.recolourHistory.pop();
+    if (!batch) return;
+    for (const [piece, before] of batch) this.recolourPiece(piece, before);
+    this.recolourChanged("undone");
+  }
+  recolourChanged(note) {
+    this.recolourPaint(); this.recolourDirty = true;
+    try { localStorage.setItem(this.recolourKey, JSON.stringify(this.recolourRows)); } catch { /* private window */ }
+    this.recolourStatus(note);
+  }
+  recolourStatus(note = "") {
+    const n = Object.keys(this.recolourRows || {}).length;
+    document.getElementById("recolour-status").textContent = `Click pieces to cut them from ${this.recolourChoice}. `
+      + `${n} piece${n === 1 ? "" : "s"} recoloured${this.recolourDirty ? " (not saved)" : ""}` + (note ? ` · ${note}` : "");
+  }
+  async saveRecolour() {
+    const rows = this.recolourRows, status = document.getElementById("recolour-status");
+    try {
+      const response = await fetch(`${this.reviewOrigin}/api/recolour`, {method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({model: modelName, pieces: rows})});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || response.status);
+      this.recolourDirty = false;
+      status.textContent = `Saved ${result.pieces} recoloured piece(s) to ${result.file}. Re-nest: make recolour MODEL=${modelName}`;
+    } catch {
+      const csv = "piece,material\n" + Object.entries(rows).sort().map(([p, m]) => `${p},${m}`).join("\n") + "\n";
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([csv], {type: "text/csv"}));
+      link.download = "recolour.csv"; link.click(); URL.revokeObjectURL(link.href);
+      this.recolourDirty = false;
+      status.textContent = `Downloaded recolour.csv (${Object.keys(rows).length} pieces): put it in data/${modelName || "<model>"}/ and run make recolour.`;
+    }
+  }
+
   showRecut() {
     const button = document.getElementById("recut-run");
     button.hidden = !this.model.recut.size; button.textContent = `Make recut (${this.model.recut.size})`;

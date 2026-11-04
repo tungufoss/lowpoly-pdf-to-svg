@@ -37,6 +37,7 @@ from pathlib import Path
 import yaml
 
 from .assembly import AssemblyOrder
+from .config import RECOLOUR_FILE, read_recolour
 from .retab import Retabber, TabStyle
 
 SVG, INKSCAPE = "http://www.w3.org/2000/svg", "http://www.inkscape.org/namespaces/inkscape"
@@ -237,8 +238,17 @@ class Materials:
         self.project = str(raw["project"])
         self.pdf = str(raw["source"]["pdf"])
         self.names = {str(m["id"]): str(m["name"]) for m in raw["materials"]}
-        self.colors = {str(m["id"]): str(m.get("color") or DEFAULT_COLORS.get(str(m["id"]).lower(), FALLBACK_COLOR))
+        # `color:` is a hex or a name from the YAML `palette:` (lowpoly #88)
+        palette = {str(k): str(v).strip().lower() for k, v in (raw.get("palette") or {}).items()}
+        self.colors = {str(m["id"]): palette.get(str(m.get("color")), str(m.get("color") or palette.get(str(m["id"]))
+                                                                         or DEFAULT_COLORS.get(str(m["id"]).lower(), FALLBACK_COLOR)))
                        for m in raw["materials"]}
+        # recolour.csv (the viewer's Recolour mode) moves pieces to another cardstock, possibly a
+        # palette colour with no material of its own yet
+        self.recolour = read_recolour(config.parent / RECOLOUR_FILE)
+        for name in set(self.recolour.values()) - set(self.names):
+            self.names[name] = f"{name.replace('_', ' ').capitalize()} cardstock"
+            self.colors[name] = palette.get(name, DEFAULT_COLORS.get(name.lower(), FALLBACK_COLOR))
 
     def color(self, material: str) -> str:
         return self.colors.get(material, FALLBACK_COLOR)
@@ -343,6 +353,8 @@ class ExportWriter:
         """Provenance and material on the piece group; operation on every path and text.
         The cardstock fills the piece: outline and holes become one even-odd path, so
         holes stay open, and the numbers turn white on a dark card to stay readable."""
+        if piece.get("id") in self.materials.recolour:
+            piece.set("data-material", self.materials.recolour[piece.get("id")])
         material = piece.get("data-material")
         color = self.materials.color(material)
         piece.set(LABEL, piece.get(LABEL, "").split(" ⚠")[0])

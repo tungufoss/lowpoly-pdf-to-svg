@@ -47,10 +47,15 @@ folds:                     # which printed line style is which fold
 output:
   default_sheet: a4        # a4 or 12x12 for nesting
 
+palette:                   # optional: the cardstock colours at hand, name -> hex
+  rust: "#b7410e"
+  teal: "#00897b"          # offered by the viewer's Recolour mode before any piece uses it
+
 materials:                 # one entry per cardstock colour
   - id: red
     name: Red cardstock
     pages: [4, 5, 6, 7, 8, 9, 10]
+    color: "#c62828"       # optional: hex or a palette name (default: a named colour for the id)
   - id: brown
     name: Brown cardstock
     pieces: [piece-04-06, piece-05-06]   # cut from brown although page 4 and 5 are red
@@ -87,6 +92,12 @@ cardstock lists the odd pieces under their own material (`pieces:`, the trace's 
 material may have only `pieces:`. Such a piece carries its own `data-material` and sits in its
 cardstock's layer, so the export colour, the glue units and the 3D colours follow it. Moving a piece
 needs no retrace: `make redo` with no pages rebuilds the SVG from the saved traces.
+
+`recolour.csv` beside the YAML (`piece,material`) moves pieces too, and wins over `pieces:`. The
+viewer's *Recolour* mode writes it. A row may name a palette colour that has no material yet: it
+becomes one (`Teal cardstock`), so give it sheets in the nester's `inventory.json`. The export reads
+`palette:` and `recolour.csv` itself, so a recolour is `make export` and a re-nest; the 3D viewer
+reads them at the next fold, or at once from the review server.
 
 `make -f fold3d.mk` compares each `reference:` count it knows (`triangles`, `corners`, `parts`,
 `openings`) with the folded trace in `fold3d-baseline.csv`. A part is a set of pieces held together
