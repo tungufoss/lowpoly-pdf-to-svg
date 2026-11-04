@@ -68,7 +68,8 @@ it may stick out past the outline, but labels never cover each other. Every labe
 Every piece also gets a `<text data-operation="draw" data-piece-number="N" data-label="N">` at
 its widest inside point, clear of the outline and every label (fold lines may cross it), up to
 `--number-size` (default 10 mm). Pieces are numbered 1, 2, … in piece order; mirror twins (from `mirror-mismatches.csv`)
-share a number, the left with a circle round it and the right with a square. Side is
+share a number, the copy with the smaller x with a circle round it and the other with a square. In the posed model
+(face towards +z, y up) smaller x is the wearer's right, the left of the screen in the viewer's front Overview. Side is
 read from the folded model's mirror-normal x coordinate when `fold3d.json` is available;
 before a folded model exists, source-piece order is used as the fallback
 (`<path data-mark="circle|square">`). Unpaired pieces have an A-prefixed number in a triangle
