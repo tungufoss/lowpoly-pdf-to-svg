@@ -113,6 +113,13 @@ them (5 %) were not read with confidence, and 675 needed a correction of some ki
 edge had a partner *(check)*. For the builder the number also says little: it tells which two
 edges meet, not where the piece goes on the mask.
 
+**Labels that lead nowhere.** Not every printed number has a partner. Around one of the eye
+openings, edges that border the opening, and so meet no other piece, still carry a number and a
+tab; the builder looks for a matching edge that does not exist, and cuts the tabs off once it is
+clear none is needed. In the edge table of the Bowser template 6 numbers stay unpaired after
+correction *(check)*. In the recreation, every edge is either glued in the folded mesh or lies on
+an opening, so a number or tab on an open edge is flagged for review instead of being printed.
+
 **Many small pieces and short seams.** The template has 180 pieces on 21 sheets. Low-poly
 detail such as the nose, teeth, eyebrows and hair is split into small pieces with short edges:
 41 seams are shorter than 15 mm *(check: seam count from segment.py)*. A short seam has little
