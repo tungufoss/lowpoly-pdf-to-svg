@@ -129,7 +129,7 @@ bench-report:
 	Rscript bench/analysis.R bench/results.csv bench/summary
 
 # Paper 1 (Quarto article in paper/, quarto-hi template). Not part of the public site.
-#   make paper      render paper/_output/index.html and index.pdf (quarto-hi article look)
+#   make paper      render paper/_output/{index,recreation}.html and .pdf (quarto-hi article look)
 .PHONY: paper
 paper:
 	cd paper && LC_ALL=C.UTF-8 quarto render   # from paper/ so font-paths: fonts resolves

@@ -1,10 +1,10 @@
-# Paper 1 in the quarto-hi article template (HI-IDN/quarto-hi article.qmd, theme v0.2.0 in
+# Papers (index.qmd = paper 1 benchmark, recreation.qmd = template recreation) in the quarto-hi article template (HI-IDN/quarto-hi article.qmd, theme v0.2.0 in
 # _extensions/). Build with `make paper` from the repository root: HTML and PDF go to
 # paper/_output/. Kept out of the public GitHub Pages site, which renders report/ only.
 # The PDF uses Typst, which ships with Quarto, so no TeX install is needed.
 project:
   output-dir: _output
-  render: [index.qmd]
+  render: [index.qmd, recreation.qmd]
 
 lang: en
 bibliography: references.bib
