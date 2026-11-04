@@ -129,9 +129,9 @@ made clear they were an error in the template, they were removed in the piece ed
 removal is recorded, so later exports keep them out.
 
 **Many small pieces and short seams.** The template has 180 pieces on 21 sheets. Low-poly
-detail such as the nose, teeth, eyebrows and hair is split into small pieces with short edges:
+detail such as the bridge between the eyes, teeth, eyebrows and hair is split into small pieces with short edges:
 41 seams are shorter than 15 mm *(check: seam count from segment.py)*. A short seam has little
-glue area, is hard to press closed from inside, and breaks first; in our build the green nose
+glue area, is hard to press closed from inside, and breaks first; in our build the green bridge between the eyes
 came apart at exactly these seams. It was held together with clear tape, the kind used for
 wrapping presents, which works but is not ideal: it shows, and taping across the scored folds of
 small pieces is fiddly.
@@ -216,18 +216,20 @@ numbers and the new short labels (@fig-viewer).
 ## Fitting the mask to a head
 
 How large should the mask be? The folded mesh makes the size a choice. A head model (MakeHuman
-base mesh, child, female or male, set in the YAML) stands upright inside the mask with its face
-behind the eye openings, and the rule is simple: the whole head must be inside the card. The
-pipeline finds the smallest scale at which it is, letting the mask rest as low as it can, on the
-crown of the head or on the shoulders, whichever it meets first (the card may press at most 5 mm
-into the shoulders). For Bowser this gives 102 % (female), 109 % (male) and 93 % (child) *(check)*,
-so the template's printed size is about right, which is consistent with the full-size mask worn by a man
-of about 1.95 m (@fig-worn). Placing the eye openings exactly over the pupils would need about
-74 % for a female head, but the crown would then come up through the top of the mask. At the
-fitted size the pupils sit below Bowser's eye openings, so the pipeline also reports where each
-line of sight meets the card, which is where a small sight hole is cut (@fig-headfit).
+base mesh, child, female or male, set in the YAML) stands upright inside the mask, facing out
+through the eye openings. The head, from chin to crown, must be completely inside the card; the
+neck and shoulders may pass the rim. The mask sits as low as it can: its lower edge comes down
+next to the chest (the card may press at most 5 mm into the shoulders) unless the crown meets
+the inside of Bowser's hair first. The pipeline finds the smallest scale at which this works. For
+Bowser it gives 86 % (female), 91 % (male) and 83 % (child) *(check)*. For the female head the
+crown touches the hair, and the pupils sit about 40 mm behind and 35 mm below the centre of
+Bowser's eye openings, which matches how the mask sits when worn: the wearer looks out a little
+below and behind Bowser's eyes. The full-size mask at 100 % is therefore roomy for most adults
+and fits a large adult (@fig-worn). Because the pupils are not at the eye openings, the pipeline
+also reports where each line of sight meets the card, which is where a small sight hole is cut
+(@fig-headfit).
 
-![Head fit for a female head: the mask at 102 %, the smallest size with the whole head inside; the mask rests on the crown. Front and side views. Grey: cardstock; blue: head; red: pupils and line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
+![Head fit for a female head: the mask at 86 %, the smallest size with the head from chin to crown inside; the lower edge sits by the chest and the crown meets the inside of the hair. Front and side views. Grey: cardstock; blue: head; red: pupils and line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
 
 
 ## Re-segmentation with darts
@@ -244,7 +246,7 @@ papercraft [@mitani2004], but with fabrication terms (seam length, sheet fit) in
 
 | Model part | Pieces (PDF) | Pieces (recut) | Seams < 15 mm (PDF) | Seams < 15 mm (recut) |
 |:--|--:|--:|--:|--:|
-| Green (nose, snout) | 26 | 16 | 11 | 2 |
+| Green (bridge between the eyes) | 26 | 16 | 11 | 2 |
 | Whole mask | 180 | 113 | 41 | 16 |
 
 : Re-segmentation of the Bowser mask *(check; regenerate from segment/evolve summaries)*. {#tbl-resegment}

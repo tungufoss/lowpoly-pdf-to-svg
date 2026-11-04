@@ -45,6 +45,7 @@ HEAD_PRESETS = {
     "child":  dict(breadth=140.0, length=177.0, height=200.0, circumference=525.0, eye_distance=56.0),
 }
 
+CHIN_BELOW_PUPILS = -0.49     # chin this far below the pupils, as a share of the head height
 SIGHT_HOLE_MM = 30.0            # default sight hole diameter
 A4_MM = (210.0, 297.0)
 
@@ -110,7 +111,7 @@ class HeadModel:
         self.vertices = vertices * k
         # Head and neck must fit inside; the shoulders and chest below must not be cut by the card
         # (the mask rests on them, and they stop the head going further in).
-        neck = -(0.49 * size.height + NECK_BELOW_CHIN_MM)
+        neck = CHIN_BELOW_PUPILS * size.height - NECK_BELOW_CHIN_MM
         upper = (self.vertices[faces][:, :, 2] > neck).all(axis=1)
         self.faces, self.torso_faces = faces[upper], faces[~upper]
         self.triangles = self.vertices[self.faces]
@@ -433,6 +434,7 @@ class FitResult:
     rule: str = "eyes"                 # "inside": smallest scale with the whole head inside the card
     rests_on: str = ""                 # "crown" or "shoulders" for the "inside" rule
     eye_scale: float | None = None     # scale at which the eye openings sit over the pupils
+    eye_offset_mm: list | None = None  # pupils from the eye openings' centre: [behind, up] in mm
     sight: list = field(default_factory=list)
 
 
@@ -452,9 +454,11 @@ class HeadFitter:
         points = (self._card * scale - pupils) @ _pitch(tip)       # into the upright head's frame
         return float(self.head.torso_depth(points).max())
 
-    def margin(self, scale: float, pupils: np.ndarray) -> float:
-        """Least air between head and card in real mm, ignoring head that has left through the neck."""
-        points = (self.samples + pupils) / scale
+    def margin(self, scale: float, pupils: np.ndarray, chin_up: bool = False) -> float:
+        """Least air between head and card in real mm, ignoring head that has left through the neck.
+        `chin_up`: only the head from the chin up; the neck and shoulders may pass the card's rim."""
+        samples = self.samples[self.samples[:, 2] >= CHIN_BELOW_PUPILS * self.head.size.height] if chin_up else self.samples
+        points = (samples + pupils) / scale
         keep = ~self.mask.beyond_neck(points, (self.head.core_centre + pupils) / scale)
         return float((scale * self.field(points[keep])).min()) if keep.any() else -1e3
 
@@ -526,7 +530,8 @@ class HeadFitter:
     def fit_inside(self, holes: tuple[np.ndarray, np.ndarray], step: float = 0.02, high: float = 1.6,
                    depth=range(-10, 61, 5), drop=range(40, -121, -5)) -> tuple[float, np.ndarray, float, str]:
         """Smallest scale, from the eye scale up, at which the whole head stays inside the card
-        (head room >= clearance) with the card at most TORSO_GIVE_MM into the shoulders. The mask
+        (head room >= clearance, chin to crown: the neck may pass the rim, and the crown may go up
+        into a hollow such as Bowser's hair) with the card at most TORSO_GIVE_MM into the shoulders. The mask
         rests as low as it can: on the crown or on the shoulders, whichever it meets first
         (Helga, 2026-11-04). Returns scale, pupil midpoint, head room and what the mask rests on."""
         centres = np.array([h.mean(0) for h in holes])
@@ -542,7 +547,7 @@ class HeadFitter:
                     p = mid * scale + np.array([0.0, r, dz])
                     if self.torso_cut(scale, p, 0) > TORSO_GIVE_MM:
                         continue
-                    m = self.margin(scale, p)
+                    m = self.margin(scale, p, chin_up=True)
                     if m >= self.clearance:
                         top = (p, m, dz)
                         break
@@ -628,6 +633,10 @@ class TemplateWriter:
                  f'(head room check: {r.tightest_mm:.0f} mm, wanted {r.clearance_mm:g})</text>'),
                 f'<text x="12" y="20" font-size="3.2">Mask {r.mask_size_mm[0]:.0f} × {r.mask_size_mm[1]:.0f} × '
                 f'{r.mask_size_mm[2]:.0f} mm (wide × deep × tall). Grey: card. Blue: head (MakeHuman, CC0). Red: pupils and sight.</text>']
+        if r.eye_offset_mm:
+            back, up = r.eye_offset_mm
+            body.append(f'<text x="12" y="25" font-size="3.2">Pupils {back:.0f} mm behind and {abs(up):.0f} mm '
+                        f'{"below" if up < 0 else "above"} the centre of the eye openings.</text>')
         extent = tri.reshape(-1, 3)
         span = max(np.ptp(extent[:, 0]), np.ptp(extent[:, 1]), np.ptp(extent[:, 2]))
         zoom = min(180.0 / span, 125.0 / np.ptp(extent[:, 2]))
@@ -773,10 +782,12 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
         holes = mask.eye_openings() if str(fit.get("eyes", "openings")) == "openings" else None
         span = None
         tip = 0.0
-        rule, rests_on, eye_scale = str(fit.get("rule", "inside")), "", None
+        rule, rests_on, eye_scale, eye_offset = str(fit.get("rule", "inside")), "", None, None
         if holes and rule == "inside":
             eye_scale, *_, span, _ = fitter.fit_to_eyes(holes)
             scale, pupils, margin, rests_on = fitter.fit_inside(holes)
+            opening = np.array([h.mean(0) for h in holes]).mean(0) * scale
+            eye_offset = [round(float(pupils[1] - opening[1]), 1), round(float(pupils[2] - opening[2]), 1)]
         elif holes:
             scale, pupils, margin, span, tip = fitter.fit_to_eyes(holes)
             head.tip(tip)
@@ -788,7 +799,7 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
                            mask_size_mm=size.round(0).tolist(), eyes="openings" if holes else "free",
                            eye_scale_range=[round(v, 3) for v in span] if span else None,
                            tip_deg=tip, rule=rule if holes else "free", rests_on=rests_on,
-                           eye_scale=round(eye_scale, 3) if eye_scale else None)
+                           eye_scale=round(eye_scale, 3) if eye_scale else None, eye_offset_mm=eye_offset)
         finder = SightFinder(mask, scale, finder_hole)
         result.sight = [finder.look(p + pupils) for p in head.pupils]
         results.append(result)
