@@ -1,7 +1,7 @@
 ---
-title: "From Bought Pattern to Buildable Mask: Digitally Recreating a Commercial Papercraft Template for Cutting Machines"
+title: "From Ready-Made Pattern to Buildable Mask: Digitally Recreating a Papercraft Template for Cutting Machines"
 # Alternatives:
-#   "Rebuilding a Commercial Papercraft Template: Readable Labels, Fewer Seams, Wider Tabs"
+#   "Rebuilding a Ready-Made Papercraft Template: Readable Labels, Fewer Seams, Wider Tabs"
 #   "Papercraft Templates Are Not Fabrication Plans: A Case Study in Digital Recreation"
 categories:
   - Digital fabrication
@@ -22,18 +22,19 @@ format:
         icon: file-pdf
         href: recreation.pdf
 abstract: |
-  Commercial low-poly papercraft masks are sold as printable PDF templates. They are designed for
+  Low-poly papercraft masks are distributed by their designers, for sale or free for personal
+  use, as printable PDF templates. They are designed for
   printing and cutting by hand, and they carry assumptions that become drawbacks once a builder
   uses a cutting machine: edge numbers in a font too small to read (and to OCR), many small
   pieces and short seams that are hard to glue and keep closed, narrow glue tabs, a fixed paper
   size, a fixed colour per page, and no three-dimensional reference for where a piece goes. We
   describe an open-source pipeline that recreates such a template digitally, from the PDF the
-  builder bought, and then rebuilds it for fabrication. Edge numbers are read by OCR and
+  builder obtained from the designer, and then rebuilds it for fabrication. Edge numbers are read by OCR and
   corrected using the mirror symmetry of the mask; the pieces are folded into a 3D mesh that an
   interactive viewer shows piece by piece; the mesh is re-segmented into fewer, larger pieces with
   darts; tabs are regenerated wider; pieces are renumbered in a build order that keeps tabs
   reachable; and an evolutionary search nests the pieces on the builder's own paper size, with
-  the side that carries each tab as a free variable. On one commercial mask (a 21-sheet US Letter
+  the side that carries each tab as a free variable. On one designer mask, free for personal use (a 21-sheet US Letter
   template with 180 pieces) the recreation has 113 pieces and 16 instead of 41 seams shorter than
   15 mm, while needing one Letter sheet fewer despite wider tabs. We close with a model of total build
   time for cutting-machine builds, where sheets are ordered so that the previous sheet can be
@@ -55,21 +56,21 @@ from Helga, 2026-11-04; tracked in issue #85. Notes in callouts are to-dos and c
 submission. Numbers marked *(check)* come from pipeline outputs on 2026-11-04 and must be
 regenerated from committed summary files before submission. Figures will be R/tidyverse chunks
 reading summary CSVs, never the template's pages: the creator's terms allow personal use only,
-so the paper shows no page scans and no pieces of the purchased template, only our own drawings
+so the paper shows no page scans and no pieces of the designer's template, only our own drawings
 and counts. Open work: #86 (sheet order), #87 (build-time model), #88 (recolour palette).
 :::
 
 # Introduction
 
-Papercraft masks and helmets made of low-poly cardstock are a popular craft. Designers sell them
-as PDF templates: a set of printable pages with the unfolded pieces, cut lines, fold lines, glue
+Papercraft masks and helmets made of low-poly cardstock are a popular craft. Designers sell them,
+or give them away for personal use, as PDF templates: a set of printable pages with the unfolded pieces, cut lines, fold lines, glue
 tabs and small numbers that tell the builder which edge glues to which. The format is made for a
 home printer, scissors and a scoring tool. Many builders now own a cutting machine (Cricut,
 Silhouette, Brother ScanNCut) that can cut, score and draw on cardstock, but the template is
 still a picture: the machine cannot use it until someone traces it, and the template's design
 choices, made for hand cutting, stay in place.
 
-This paper is a case study of that gap. One of us bought a commercial template for a low-poly
+This paper is a case study of that gap. One of us downloaded a designer's template for a low-poly
 Bowser mask and built it with a Cricut. Doing so exposed a list of practical problems that have
 little to do with the quality of the design and a lot to do with the template being a fixed,
 printed artefact (@sec-problem). We then describe an open-source pipeline,
@@ -79,18 +80,19 @@ time it takes, and how the order of the sheets changes it (@sec-time).
 
 Contributions:
 
-1. A list of the drawbacks of commercial papercraft templates when the build uses a cutting
+1. A list of the drawbacks of ready-made papercraft templates when the build uses a cutting
    machine, drawn from a full build and from builder forums.
-2. A pipeline that turns a purchased template into an editable, fabrication-ready model: OCR of
+2. A pipeline that turns a ready-made template into an editable, fabrication-ready model: OCR of
    edge numbers corrected by mirror symmetry, a folded 3D mesh, an interactive viewer with an
    assembly player, re-segmentation with darts, generated wider tabs, build-order numbering and
    evolutionary nesting with tab placement as a variable.
 3. A model of total build time for cutting-machine builds, and sheet ordering that lets gluing
    overlap with cutting.
-4. A position on reuse: the software works on a template the builder bought, for personal edits;
+4. A position on reuse: the software works on a template the builder obtained legitimately (bought, or free for
+   personal use), for personal edits;
    it does not redistribute the designer's PDF or pages.
 
-# The problem: what a bought template gets in the way of {#sec-problem}
+# The problem: what a ready-made template gets in the way of {#sec-problem}
 
 ::: {.callout-note collapse="true"}
 ## To do
@@ -142,7 +144,7 @@ subsection. One own-drawn figure for the pipeline, one for the notation, one for
 (screenshot of our own generated model, not the template).
 :::
 
-A pipeline figure (to draw) will show the stages. The input is the PDF the builder bought and a short
+A pipeline figure (to draw) will show the stages. The input is the PDF the builder obtained and a short
 YAML file per model (paper size, fold styles, colours). Everything after vectorization works on
 our own representation, so later stages never need the PDF again.
 
@@ -307,7 +309,7 @@ steps reduces the idle time (#86).
 
 # Conclusion
 
-A bought papercraft template is a good design delivered in a format that fixes paper size,
+A ready-made papercraft template is a good design delivered in a format that fixes paper size,
 colour, piece count, tab width and build order. Recreating it digitally, with symmetry to make
 the reading reliable and the folded mesh as the shared reference, lets the builder change all of
 these for their own use while keeping the designer's shape.
