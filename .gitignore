@@ -26,3 +26,4 @@ data/*/fold3d.json
 data/*/fold3d-state.npz
 data/*/fold3d-components.json
 !data/example/example.pdf
+paper/figures/

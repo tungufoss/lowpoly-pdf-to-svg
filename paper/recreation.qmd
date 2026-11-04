@@ -82,6 +82,11 @@ printed artefact (@sec-problem). We then describe an open-source pipeline,
 problems (@sec-method), and we look at a part of the build that templates ignore entirely: the
 time it takes, and how the order of the sheets changes it (@sec-time).
 
+![The Bowser mask built from the template at 100 % scale, worn by an adult of about 1.95 m. It rests on the shoulders, and the snout reaches below the shoulder line. Mask design: Papercraft Cat, © 2017 Remy Del Toro.](figures/bowser-worn.jpg){#fig-worn width=60%}
+
+<!-- Figure files live in the private papercraft repo (docs/paper/figures/) and are served next to this page; they are not in this public repo. -->
+
+
 Contributions:
 
 1. A list of the drawbacks of ready-made papercraft templates when the build uses a cutting
@@ -204,7 +209,20 @@ With every edge paired, the pieces are folded into a 3D mesh (fold3d): each piec
 planar faces joined at its fold lines, and glued edges are brought together. The mesh drives a
 local Three.js viewer in which the builder can click a piece in 3D and see it on the flat sheet
 and vice versa, filter by cardstock, search by number, and switch the labels between the PDF
-numbers and the new short labels.
+numbers and the new short labels (@fig-viewer).
+
+![The interactive viewer. Left: the folded model in its cardstock colours, with the MakeHuman head and torso inside for scale. Right: the flat pieces on their sheets; clicking a face in one view selects it in the other. The toolbar filters by cardstock, finds a number, switches between PDF numbers and Cricut labels, and runs the Assemble player. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/viewer.jpg){#fig-viewer}
+
+## Fitting the mask to a head
+
+At 100 % the mask is far larger than a head (@fig-worn). The folded mesh makes the size a choice:
+a head model (MakeHuman base mesh, child, female or male, set in the YAML) is placed upright with
+its pupils behind the mask's eye openings, and the smallest scale at which the head fits is
+reported, together with where to cut sight holes (@fig-headfit). For Bowser the fits are about
+74 % (female), 77 % (male) and 67 % (child) *(check)*.
+
+![Head fit for a female head: the mask at 74 %, front and side views. Grey: cardstock; blue: head; red: pupils and line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
+
 
 ## Re-segmentation with darts
 
