@@ -70,3 +70,12 @@ For cutting the export on a Cricut (cut plan, Design Space operations, recut), s
 - **Mirror pairs** steps through the twin pairs, worst first, with *Back*/*Next* (keys B and N); *Edit pair…* opens both in Piece Review.
 - Right-click a face to *Edit piece in Piece Review…*, mark it as tab or surface (*Save tab marks & re-glue* writes the overrides and folds again), or *Recut this piece*; *Make recut* then runs `make recut` and opens the Cricut upload.
 - The split between the two views can be dragged or collapsed to either side.
+
+### Recolouring {#recolour}
+
+A piece is cut from its page's cardstock unless a material in the YAML lists it under `pieces:`, so a recolour is a YAML edit and a re-nest, never moving pieces between pages by hand. The viewer's **Recolour** button does the edit interactively:
+
+1. `make palette CONFIG=...` writes `data/<project>/palette.json` beside `fold3d.json`: every material and the spare colours of the YAML `palette:`. The viewer colours the model as the YAML says now, without a new fold.
+2. In the viewer choose **Recolour**, pick what a click takes (a piece and its mirror twin, one piece, or every piece of that colour glued to it), click a piece in 3D, then a colour. The bar shows the card area per colour, in sheets, before and after (folded faces without tabs; nest again for the real count). **Undo** steps back; the change is kept in the browser until it is saved.
+3. **Save recolour.csv** downloads `piece,material` rows for the pieces that changed. Put it in `data/<project>/` and run `make recolour CONFIG=...`: it rewrites only the `pieces:` lists in `materials:` (comments and unchanged lists stay as written, a piece back on its page's colour leaves the lists, a spare palette colour becomes a material) and refreshes `palette.json`. **Copy YAML** gives the whole `materials:` list instead, without comments.
+4. `make export`, then nest again (`make nest` in the models repository) for the new sheet count.
