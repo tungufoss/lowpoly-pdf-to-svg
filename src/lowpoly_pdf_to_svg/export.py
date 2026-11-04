@@ -531,7 +531,7 @@ class PieceNumbers:
     shares its twin's number. The copy with the smaller x (the wearer's right; fold3d poses the face
     towards +z with y up) gets a circle and the other a square, using the
     folded model's x positions when available (source order is the fallback before folding).
-    An unpaired piece (on the centre line) keeps its sequence slot with an A prefix and a triangle.
+    An unpaired piece (on the centre line) keeps its sequence slot and gets a triangle (no prefix).
     `order` (the build order from assembly.py) numbers the pieces in glue order instead of page
     order: glue 1 first, then 2, ...; pieces it does not list follow in page order."""
 
@@ -588,7 +588,7 @@ class PieceNumbers:
         if pid not in self.numbers or draw is None or len(outline) < 3:
             return
         frame = self.frames.get(pid)
-        text = ('A' if frame == 'triangle' else '') + str(self.numbers[pid])
+        text = str(self.numbers[pid])   # the frame alone marks a centre piece (triangle)
         segments = list(zip(outline, outline[1:] + outline[:1]))
         for box in labels or []:
             segments += list(zip(box, box[1:] + box[:1]))

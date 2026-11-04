@@ -72,8 +72,8 @@ share a number, the copy with the smaller x with a circle round it and the other
 (face towards +z, y up) smaller x is the wearer's right, the left of the screen in the viewer's front Overview. Side is
 read from the folded model's mirror-normal x coordinate when `fold3d.json` is available;
 before a folded model exists, source-piece order is used as the fallback
-(`<path data-mark="circle|square">`). Unpaired pieces have an A-prefixed number in a triangle
-(`data-mark="triangle"`), for example A3. The original sequence positions are retained so
+(`<path data-mark="circle|square">`). Unpaired pieces have their number in a triangle
+(`data-mark="triangle"`), for example 3 in a triangle; no letter prefix. The original sequence positions are retained so
 existing paired piece numbers do not change. Numbers that read differently upside down (6, 9, 16, 69, …)
 are underlined (`data-mark="underline"`). Piece numbers are not glue labels and never count as
 one.
