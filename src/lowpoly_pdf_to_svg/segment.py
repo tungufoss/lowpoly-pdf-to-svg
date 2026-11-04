@@ -686,8 +686,10 @@ class Report:
             for edge, faces in mesh.edge_faces.items():
                 if any(f in region for f, _ in faces):
                     (cuts if seg.edge_kind(edge) != "fold" else folds).append(mesh.points[list(edge)])
-            ax.add_collection3d(Line3DCollection(folds, colors="#777", linewidths=0.4, linestyles="dashed"))
-            ax.add_collection3d(Line3DCollection(cuts, colors="black", linewidths=1.4))
+            if folds:   # none when every piece is a single face (a recolour split one up)
+                ax.add_collection3d(Line3DCollection(folds, colors="#777", linewidths=0.4, linestyles="dashed"))
+            if cuts:
+                ax.add_collection3d(Line3DCollection(cuts, colors="black", linewidths=1.4))
             ax.set_xlim(lo[0], hi[0]), ax.set_ylim(lo[1], hi[1]), ax.set_zlim(lo[2], hi[2])
             ax.set_box_aspect(hi - lo)
             ax.view_init(elev=15, azim=-60)

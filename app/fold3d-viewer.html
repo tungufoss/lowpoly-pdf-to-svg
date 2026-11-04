@@ -193,8 +193,8 @@
 </div>
 <div id="recolour-bar" role="toolbar" aria-label="Recolour pieces" hidden>
   <label>Pick <select id="recolour-scope" aria-label="What a click picks">
-    <option value="twins">piece and its mirror twin</option><option value="piece">one piece</option>
-    <option value="region">connected pieces of that colour</option></select></label>
+    <option value="twins">piece and its mirror twin</option><option value="face">face and its mirror face (splits the piece)</option>
+    <option value="piece">one piece</option><option value="region">all of that colour joined to it</option></select></label>
   <span id="recolour-swatches" role="group" aria-label="Palette colours"></span>
   <span id="recolour-label" aria-live="polite">Click a piece in 3D, then a colour.</span>
   <button type="button" id="recolour-undo" disabled title="Undo the last recolour">Undo</button>
@@ -310,58 +310,94 @@ const SVGNS = "http://www.w3.org/2000/svg";
 
 // Cardstock palette: palette.json beside fold3d.json (make palette) lists every material of the YAML
 // and the spare `palette:` colours. A piece is cut from its page's material unless a material lists it
-// under pieces:, the same rule as the pipeline, so the viewer shows the YAML's colours without a new
-// fold. Without palette.json the colours come from fold3d.json. A recolour is saved as recolour.csv
-// (piece,material) for `make recolour`, which writes it into the YAML.
+// under pieces:, and a face from its piece's unless a material lists it under faces:, the same rule as
+// the pipeline, so the viewer shows the YAML's colours without a new fold. A piece whose faces end up
+// in two colours is split along the colour boundary when it is re-cut (make segment). Without
+// palette.json the colours come from fold3d.json. A recolour is saved as recolour.csv (piece,material;
+// a row names a piece or one face, piece-04-06/5) for `make recolour`, which writes it into the YAML.
 class Palette {
   static pageOf(piece) { const m = /^piece-(\d+)-/.exec(piece); return m ? Number(m[1]) : null; }
   constructor(data, model) {
     const used = [...new Set(Object.values(model.pieces).map(p => p.material))].sort();
     this.fromYaml = !!data?.materials?.length;
-    this.entries = this.fromYaml ? data.materials.map(m => ({...m, pages: m.pages || [], pieces: m.pieces || []}))
-      : used.map(id => ({id, name: id, color: model.colours?.[id] || "#b3b3b3", pages: [], pieces: [], spare: false}));
+    this.entries = this.fromYaml ? data.materials.map(m => ({...m, pages: m.pages || [], pieces: m.pieces || [], faces: m.faces || []}))
+      : used.map(id => ({id, name: id, color: model.colours?.[id] || "#b3b3b3", pages: [], pieces: [], faces: [], spare: false}));
     this.sheetMm = data?.sheet_mm || [210, 297];
     this.byId = new Map(this.entries.map(m => [m.id, m]));
-    this.pageMaterial = new Map(), this.moved = new Map();
+    this.pageMaterial = new Map(), this.moved = new Map(), this.faceRule = new Map();
     for (const m of this.entries) {
       for (const page of m.pages) this.pageMaterial.set(page, m.id);
       for (const piece of m.pieces) this.moved.set(piece, m.id);
+      for (const face of m.faces) this.faceRule.set(face, m.id);
     }
   }
   get ids() { return this.entries.map(m => m.id); }
   name(id) { return this.byId.get(id)?.name || id; }
   // The YAML's material for a piece; fold3d.json's when the YAML says nothing.
   yamlMaterial(piece, fallback) { return this.moved.get(piece) || this.pageMaterial.get(Palette.pageOf(piece)) || fallback; }
+  static colourOf(model, face) { return face.material || model.pieces[face.piece].material; }
   // Colour the model as the YAML says; remember that as the starting point of the recolour.
   apply(model) {
     model.colours = {...(model.colours || {})};
     for (const m of this.entries) model.colours[m.id] = m.color;
     if (this.fromYaml) for (const [piece, data] of Object.entries(model.pieces)) data.material = this.yamlMaterial(piece, data.material);
     model.paletteIds = this.ids;
-    this.initial = new Map(Object.entries(model.pieces).map(([piece, data]) => [piece, data.material]));
+    this.faceIndex = new Map(model.faces.map((f, i) => [f.id, i]));
+    this.facesOf = new Map();
+    model.faces.forEach((f, i) => { if (!this.facesOf.has(f.piece)) this.facesOf.set(f.piece, []); this.facesOf.get(f.piece).push(i); });
+    for (const [id, material] of this.faceRule) {
+      const f = model.faces[this.faceIndex.get(id)];
+      if (f && material !== model.pieces[f.piece].material) f.material = material;
+    }
+    this.initialPiece = new Map(Object.entries(model.pieces).map(([piece, data]) => [piece, data.material]));
+    this.initialFace = model.faces.map(f => Palette.colourOf(model, f));
   }
+  // Give faces a colour. A piece left in one colour takes it as the piece's; one left in two is split.
+  setFaces(model, faces, material) {
+    const pieces = new Set();
+    for (const i of faces) { model.faces[i].material = material; pieces.add(model.faces[i].piece); }
+    for (const piece of pieces) {
+      const own = this.facesOf.get(piece), colours = new Set(own.map(i => model.faces[i].material || model.pieces[piece].material));
+      if (colours.size === 1) model.pieces[piece].material = [...colours][0];
+      for (const i of own) if (model.faces[i].material === model.pieces[piece].material) delete model.faces[i].material;
+    }
+    return [...pieces];
+  }
+  split(model) { return [...this.facesOf.keys()].filter(piece => this.facesOf.get(piece).some(i => model.faces[i].material)).sort(); }
   changes(model) {
-    return [...this.initial].filter(([piece, was]) => model.pieces[piece] && model.pieces[piece].material !== was)
-      .map(([piece]) => [piece, model.pieces[piece].material]).sort(([a], [b]) => a < b ? -1 : 1);
+    const rows = [];
+    for (const [piece, faces] of [...this.facesOf].sort(([a], [b]) => a < b ? -1 : 1)) {
+      const now = faces.map(i => Palette.colourOf(model, model.faces[i]));
+      const wasSplit = faces.some(i => this.initialFace[i] !== this.initialPiece.get(piece));
+      if (new Set(now).size === 1) {
+        if (now[0] !== this.initialPiece.get(piece) || wasSplit) rows.push([piece, now[0]]);
+      } else faces.forEach((i, k) => { if (now[k] !== this.initialFace[i]) rows.push([model.faces[i].id, now[k]]); });
+    }
+    return rows;
   }
   csv(model) { return "piece,material\n" + this.changes(model).map(([p, m]) => `${p},${m}\n`).join(""); }
   // The whole materials: list after the recolour (comments are not kept; make recolour keeps them).
   yaml(model) {
-    const lists = new Map(this.ids.map(id => [id, []]));
-    for (const piece of Object.keys(model.pieces).sort()) {
+    const lists = new Map(this.ids.map(id => [id, {pieces: [], faces: []}]));
+    for (const piece of [...this.facesOf.keys()].sort()) {
       const material = model.pieces[piece].material, page = this.pageMaterial.get(Palette.pageOf(piece));
-      if (material !== page && lists.has(material)) lists.get(material).push(piece);
+      if (material !== page && lists.has(material)) lists.get(material).pieces.push(piece);
+      for (const i of this.facesOf.get(piece)) {
+        const f = model.faces[i];
+        if (f.material && lists.has(f.material)) lists.get(f.material).faces.push(f.id);
+      }
     }
     if (this.fromYaml) for (const [piece, id] of this.moved)   // pieces the YAML moves that this model lacks
-      if (!model.pieces[piece] && !lists.get(id).includes(piece)) lists.get(id).push(piece);
+      if (!model.pieces[piece] && !lists.get(id).pieces.includes(piece)) lists.get(id).pieces.push(piece);
     const lines = ["materials:"];
     for (const m of this.entries) {
-      const pieces = lists.get(m.id);
-      if (m.spare && !pieces.length) continue;
+      const {pieces, faces} = lists.get(m.id);
+      if (m.spare && !pieces.length && !faces.length) continue;
       lines.push(`  - id: ${m.id}`, `    name: ${m.name}`);
       if (m.spare) lines.push(`    color: "${m.color}"`);
       if (m.pages.length) lines.push(`    pages: [${m.pages.join(", ")}]`);
-      if (pieces.length) lines.push(`    pieces: [${pieces.sort().join(", ")}]`);
+      if (pieces.length) lines.push(`    pieces: [${pieces.join(", ")}]`);
+      if (faces.length) lines.push(`    faces: [${faces.join(", ")}]`);
     }
     return lines.join("\n") + "\n";
   }
@@ -376,20 +412,48 @@ class Palette {
         const a = [0, 1, 2].map(j => p[k][j] - p[0][j]), b = [0, 1, 2].map(j => p[k + 1][j] - p[0][j]);
         x += a[1] * b[2] - a[2] * b[1]; y += a[2] * b[0] - a[0] * b[2]; z += a[0] * b[1] - a[1] * b[0];
       }
-      const material = model.pieces[face.piece].material;
+      const material = Palette.colourOf(model, face);
       area.set(material, (area.get(material) || 0) + Math.hypot(x, y, z) / 2);
     });
     return area;
   }
-  // The pieces a click picks: the piece, it and its twin, or every piece of its colour glued to it.
-  pick(model, piece, scope, twins) {
-    if (scope === "piece") return [piece];
-    if (scope === "twins") return [piece, twins.get(piece)].filter(p => p && model.pieces[p]);
-    const material = model.pieces[piece].material, seen = new Set([piece]), queue = [piece];
+  // A face's mirror: the face of the twin piece (any piece, for a centre piece) nearest the face's
+  // reflection in x = 0, within 10 mm (segment.py MIRROR_MM). Face numbers of twins need not match.
+  mirrorFace(model, i, twins) {
+    const centre = f => [0, 1, 2].map(k => f.v.reduce((sum, v) => sum + model.vertices[v][k], 0) / f.v.length);
+    const [x, y, z] = centre(model.faces[i]), twin = twins.get(model.faces[i].piece);
+    const pool = twin && this.facesOf.has(twin) ? this.facesOf.get(twin) : model.faces.map((_, k) => k);
+    let best, lowest = 10;
+    for (const k of pool) {
+      if (k === i) continue;
+      const [a, b, c] = centre(model.faces[k]), d = Math.hypot(a + x, b - y, c - z);
+      if (d < lowest) { lowest = d; best = k; }
+    }
+    return best;
+  }
+  // The faces a click picks: a face and its mirror face, the piece (and its twin), or every face of
+  // the clicked colour that is joined to it by a fold or a glue.
+  pick(model, face, scope, twins) {
+    const piece = model.faces[face].piece;
+    if (scope === "face") return [face, this.mirrorFace(model, face, twins)].filter(i => i !== undefined);
+    if (scope === "piece") return [...this.facesOf.get(piece)];
+    if (scope === "twins") return [piece, twins.get(piece)].filter(p => p && this.facesOf.has(p)).flatMap(p => this.facesOf.get(p));
+    const material = Palette.colourOf(model, model.faces[face]), seen = new Set([face]), queue = [face];
+    const byEdge = new Map(), key = (a, b) => a < b ? `${a}:${b}` : `${b}:${a}`;
+    model.faces.forEach((f, i) => f.v.forEach((a, k) => {
+      const e = key(a, f.v[(k + 1) % f.v.length]);
+      if (!byEdge.has(e)) byEdge.set(e, []);
+      byEdge.get(e).push(i);
+    }));
+    const glued = new Map();   // a glue joins the faces on its two edges
+    for (const g of model.glues || []) {
+      const faces = [...(byEdge.get(key(g.v[0], g.v[1])) || []), ...(byEdge.get(key(g.v[2], g.v[3])) || [])];
+      for (const i of faces) glued.set(i, [...(glued.get(i) || []), ...faces]);
+    }
     while (queue.length) {
-      const at = queue.shift();
-      for (const g of model.gluesOf(at)) for (const next of [g.piece, g.tab_piece])
-        if (!seen.has(next) && model.pieces[next]?.material === material) { seen.add(next); queue.push(next); }
+      const at = queue.shift(), f = model.faces[at];
+      const next = [...f.v.flatMap((a, k) => byEdge.get(key(a, f.v[(k + 1) % f.v.length])) || []), ...(glued.get(at) || [])];
+      for (const i of next) if (!seen.has(i) && Palette.colourOf(model, model.faces[i]) === material) { seen.add(i); queue.push(i); }
     }
     return [...seen];
   }
@@ -411,6 +475,8 @@ class Model {
     this.tabDirty = this.tabOverrides.size > 0;
   }
   gluesOf(piece) { return this.glues.filter(g => g.piece === piece || g.tab_piece === piece); }
+  // A face's cardstock: its own after a recolour of single faces, else its piece's.
+  materialOf(face) { return face.material || this.pieces[face.piece]?.material; }
   isOpen(g) { return !/^(closes|proposed, closes)$/.test(g.status); }
   isTab(index) {
     const face = this.faces[index];
@@ -653,7 +719,7 @@ function pieceBoundaryEdges(faces) {
   const edges = new Map();
   for (const face of faces) face.v.forEach((a, i) => {
     const b = face.v[(i + 1) % face.v.length];
-    const key = `${face.piece}|${Math.min(a, b)}:${Math.max(a, b)}`;
+    const key = `${face.piece}${face.material ? "~" + face.material : ""}|${Math.min(a, b)}:${Math.max(a, b)}`;
     const entry = edges.get(key) || {face, a, b, count: 0};
     entry.count++; edges.set(key, entry);
   });
@@ -840,13 +906,13 @@ class FoldedView {
         this.triFace.push(i);
       }
     });
-    this.base = faces.map(f => new THREE.Color(colours[pieces[f.piece].material] || "#b3b3b3"));
+    this.base = faces.map(f => new THREE.Color(colours[this.model.materialOf(f)] || "#b3b3b3"));
     this.selectedPiece = null; this.selectedFace = null;
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(new Float32Array(pos.length), 3));
     this.triFace.forEach((faceIndex, triangleIndex) => geo.addGroup(triangleIndex * 3, 3,
-      this.materialIndex.get(pieces[faces[faceIndex].piece].material)));
+      this.materialIndex.get(this.model.materialOf(faces[faceIndex]))));
     geo.computeVertexNormals();
     // The cut pieces are used inside out: the printed side (counter-clockwise faces, with the numbers) is the inside
     // of the model. The outside shows the full cardstock colour, the inside the pale tint with the glue numbers.
@@ -901,7 +967,7 @@ class FoldedView {
       const end = new THREE.Vector3(...this.model.vertices[b]).addScaledVector(normal, insideSign * 0.06);
       const across = normal.clone().cross(end.clone().sub(start)).normalize().multiplyScalar(0.3);
       const corners = [start.clone().sub(across), end.clone().sub(across), end.clone().add(across), start.clone().add(across)];
-      const material = this.model.pieces[face.piece].material;
+      const material = this.model.materialOf(face);
       if (!byMaterial.has(material)) byMaterial.set(material, []);
       for (const i of [0, 1, 2, 0, 2, 3]) byMaterial.get(material).push(...corners[i].toArray());
     }
@@ -1137,7 +1203,7 @@ class FoldedView {
       .map(g => ({pairs: [[g.v[0], g.v[3]], [g.v[1], g.v[2]]], materials: new Set([g.piece, g.tab_piece]
         .map(piece => this.model.pieces[piece]?.material).filter(Boolean))}));
     this.wrongLineRecords = this.model.wrong_folds.map(pair => ({pairs: [pair], materials: new Set(
-      (edgeFaces.get(edgeKey(...pair)) || []).map(face => this.model.pieces[face.piece]?.material).filter(Boolean))}));
+      (edgeFaces.get(edgeKey(...pair)) || []).map(face => this.model.materialOf(face)).filter(Boolean))}));
     this.openLines = line(css.getPropertyValue("--open").trim());
     this.wrongLines = line(css.getPropertyValue("--wrong").trim());
     this.showOpen = true; this.showWrong = true;
@@ -1218,10 +1284,10 @@ class FoldedView {
   // After a recolour: face colours, cardstock groups, the cut ribbons and what each number belongs to.
   recoloured(pieces) {
     const changed = new Set(pieces), n = this.materialNames.length;
-    this.model.faces.forEach((f, i) => { if (changed.has(f.piece)) this.base[i] = new THREE.Color(this.model.colours[this.model.pieces[f.piece].material] || "#b3b3b3"); });
+    this.model.faces.forEach((f, i) => { if (changed.has(f.piece)) this.base[i] = new THREE.Color(this.model.colours[this.model.materialOf(f)] || "#b3b3b3"); });
     this.mesh.geometry.groups.forEach((group, t) => {
-      const piece = this.model.faces[this.triFace[t]].piece;
-      if (changed.has(piece)) group.materialIndex = this.materialIndex.get(this.model.pieces[piece].material) + (group.materialIndex >= n ? n : 0);
+      const face = this.model.faces[this.triFace[t]];
+      if (changed.has(face.piece)) group.materialIndex = this.materialIndex.get(this.model.materialOf(face)) + (group.materialIndex >= n ? n : 0);
     });
     const of = piece => this.model.pieces[piece]?.material;
     for (const sprite of this.numbers.children) {
@@ -1237,7 +1303,7 @@ class FoldedView {
   // The nearest face the ray meets among the cardstocks shown (hidden ones cannot be clicked).
   visibleHit(ray) {
     return ray.intersectObjects([this.mesh, this.inner]).find(hit => {
-      const material = this.model.pieces[this.model.faces[this.triFace[hit.faceIndex]].piece]?.material;
+      const material = this.model.materialOf(this.model.faces[this.triFace[hit.faceIndex]]);
       if (this.built && !this.built.has(this.model.faces[this.triFace[hit.faceIndex]].piece)) return false;
       return !this.currentMaterialFilter || material === this.currentMaterialFilter;
     });
@@ -1251,7 +1317,7 @@ class FoldedView {
       if (!byEdge.has(edge)) byEdge.set(edge, []);
       byEdge.get(edge).push(i);
     }));
-    const of = face => this.model.pieces[this.model.faces[face].piece]?.material, glued = new Set();
+    const of = face => this.model.materialOf(this.model.faces[face]), glued = new Set();
     for (const g of this.model.glues) {
       if (![g.piece, g.tab_piece].some(piece => this.model.pieces[piece]?.material === material)) continue;
       for (const face of [...(byEdge.get(key(g.v[0], g.v[1])) || []), ...(byEdge.get(key(g.v[2], g.v[3])) || [])])
@@ -1265,7 +1331,7 @@ class FoldedView {
     const n = this.materialNames.length, dim = material ? this.gluedFaces(material) : new Set();
     this.mesh.geometry.groups.forEach((group, t) => {
       const face = this.triFace[t];
-      group.materialIndex = this.materialIndex.get(this.model.pieces[this.model.faces[face].piece].material) + (dim.has(face) ? n : 0);
+      group.materialIndex = this.materialIndex.get(this.model.materialOf(this.model.faces[face])) + (dim.has(face) ? n : 0);
     });
     for (const list of [this.meshMaterials, this.innerMaterials])
       list.forEach((entry, i) => { if (i < 2 * n) entry.visible = i >= n || !material || this.materialNames[i] === material; });
@@ -1370,7 +1436,7 @@ class FoldedView {
   fit() {
     let box;
     if (this.currentMaterialFilter) {
-      const selected = this.model.faces.filter(f => this.model.pieces[f.piece].material === this.currentMaterialFilter);
+      const selected = this.model.faces.filter(f => this.model.materialOf(f) === this.currentMaterialFilter);
       const points = selected.flatMap(f => f.v.map(v => new THREE.Vector3(...this.model.vertices[v])));
       box = new THREE.Box3().setFromPoints(points);
     } else box = new THREE.Box3().setFromObject(this.mesh);
@@ -1484,7 +1550,7 @@ class PatternView {
   // The printed side as the 3D view shows it: the cardstock colour, paled; tabs white.
   faceTint(i) {
     if (this.model.isTab(i)) return "#ffffff";
-    const material = this.model.pieces[this.model.faces[i].piece].material;
+    const material = this.model.materialOf(this.model.faces[i]);
     const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3").lerp(new THREE.Color("#ffffff"), 0.45);
     return `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
   }
@@ -1493,7 +1559,7 @@ class PatternView {
     this.polys.forEach((p, i) => {
       const mine = piece && this.model.faces[i].piece === piece;
       const f = this.model.faces[i];
-      const material = this.model.pieces[f.piece].material;
+      const material = this.model.materialOf(f);
       const colour = new THREE.Color(this.model.colours[material] || "#b3b3b3").lerp(new THREE.Color("#ffffff"), 0.68);
       const tint = `rgb(${Math.round(colour.r * 255)} ${Math.round(colour.g * 255)} ${Math.round(colour.b * 255)})`;
       // After a search only the pieces found keep their cardstock tint.
@@ -2194,91 +2260,129 @@ class Viewer {
     this.folded.showInspection(marks); this.pattern.inspectionTargets = marks;
     this.pattern.found.querySelectorAll(".inspection-marks").forEach(node=>node.remove());
   }
-  // Recolour (issue #88): pick pieces, give them a palette colour; the change is kept in this browser
-  // until saved as recolour.csv (make recolour writes it into the YAML, then make export and re-nest).
+  // Recolour (issue #88): pick faces or pieces, give them a palette colour. Faces of one piece in two
+  // colours split it (cut along the colour boundary at the re-cut, make segment). The change is kept
+  // in this browser until saved as recolour.csv (make recolour writes it into the YAML).
   setupRecolour() {
     const bar = document.getElementById("recolour-bar"), label = document.getElementById("recolour-label");
     const scope = document.getElementById("recolour-scope"), swatches = document.getElementById("recolour-swatches");
     const undo = document.getElementById("recolour-undo"), save = document.getElementById("recolour-save");
     const copy = document.getElementById("recolour-yaml"), filter = document.getElementById("material-filter");
-    const key = `fold3d-recolour:${jsonUrl}`, history = [];
-    let twins = null, picked = [];
-    const sheet = this.palette.sheetMm[0] * this.palette.sheetMm[1];
-    const before = this.palette.areas(this.model);
+    const key = `fold3d-recolour:${jsonUrl}`, history = [], palette = this.palette, model = this.model;
+    let twins = null, picked = [], clicked = null;
+    const sheet = palette.sheetMm[0] * palette.sheetMm[1];
+    const before = palette.areas(model);
+    const short = id => id.replace("piece-", "");
     const summary = () => {
-      const changes = this.palette.changes(this.model), after = this.palette.areas(this.model);
-      const moved = this.palette.ids.filter(id => Math.abs((after.get(id) || 0) - (before.get(id) || 0)) > 1)
+      const changes = palette.changes(model), after = palette.areas(model), split = palette.split(model);
+      const moved = palette.ids.filter(id => Math.abs((after.get(id) || 0) - (before.get(id) || 0)) > 1)
         .map(id => `${id} ${((before.get(id) || 0) / sheet).toFixed(1)}→${((after.get(id) || 0) / sheet).toFixed(1)}`);
       undo.disabled = !history.length; save.disabled = copy.disabled = !changes.length;
-      const what = picked.length ? `${picked.map(p => p.replace("piece-", "")).join(", ")} · ${this.model.pieces[picked[0]].material}. ` : "Click a piece in 3D, then a colour. ";
-      label.textContent = what + (changes.length ? `${changes.length} recoloured · card in sheets: ${moved.join(", ") || "unchanged"}` : "");
-      label.title = "Card area per colour in sheets, from the folded faces without tabs; nest again for the real sheet count.";
+      let what = "Click a face in 3D, then a colour. ";
+      if (picked.length) {
+        const pieces = [...new Set(picked.map(i => model.faces[i].piece))];
+        what = scope.value === "face" ? `face ${picked.map(i => short(model.faces[i].id)).join(" + ")}`
+          : `${pieces.length > 4 ? `${pieces.length} pieces` : pieces.map(short).join(", ")} (${picked.length} faces)`;
+        what += ` · ${model.materialOf(model.faces[picked[0]])}. `;
+      }
+      label.textContent = what + (changes.length ? `${changes.length} changes${split.length ? ` · split: ${split.map(short).join(", ")}` : ""}`
+        + ` · card in sheets: ${moved.join(", ") || "unchanged"}` : "");
+      label.title = "Card area per colour in sheets, from the folded faces without tabs; nest again for the real sheet count."
+        + (split.length ? " Split pieces are cut apart with make segment PIECES=" + split.join(",") : "");
     };
     const addFilterOption = id => {
       if ([...filter.options].some(o => o.value === id)) return;
       const option = document.createElement("option"); option.value = id; option.textContent = id[0].toUpperCase() + id.slice(1);
       filter.append(option);
     };
-    const assign = (pieces, material, remember = true) => {
-      const was = pieces.map(p => [p, this.model.pieces[p].material]);
-      if (was.every(([, m]) => m === material)) return;
-      for (const p of pieces) this.model.pieces[p].material = material;
-      if (remember) history.push(was);
-      addFilterOption(material);
+    const store = () => {
+      const rows = model.faces.flatMap((f, i) => model.materialOf(f) !== palette.initialFace[i] ? [[f.id, model.materialOf(f)]] : []);
+      try { localStorage.setItem(key, JSON.stringify(rows)); } catch {}
+    };
+    const refresh = pieces => {
       this.folded.recoloured(pieces); this.pattern.recoloured(pieces);
+      store(); summary();
+    };
+    const assign = (faces, material) => {
+      const was = faces.map(i => [i, model.materialOf(model.faces[i])]);
+      if (was.every(([, m]) => m === material)) return;
+      history.push(was);
+      addFilterOption(material);
+      refresh(palette.setFaces(model, faces, material));
       // The face details and the crop caption name the cardstock: show them again, keeping the pick.
       const face = this.folded.selectedFace, keep = picked;
-      if (remember && face !== null && face !== undefined) {
+      if (face !== null && face !== undefined) {
         this.select(face, "3d", false);
-        picked = keep; this.folded.relatedPieces = picked.filter(p => p !== this.model.faces[face].piece);
-        this.folded.paint(this.folded.selectedPiece, face);
+        picked = keep; mark();
       }
-      try { localStorage.setItem(key, JSON.stringify(this.palette.changes(this.model))); } catch {}
-      summary();
     };
-    for (const m of this.palette.entries) {
+    // The picked faces show blue; their pieces lighter (paint's related faces and pieces).
+    const mark = () => {
+      const pieces = [...new Set(picked.map(i => model.faces[i].piece))];
+      this.folded.relatedPieces = scope.value === "face" ? [] : pieces.filter(p => p !== this.folded.selectedPiece);
+      this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace);
+      if (scope.value === "face") {   // only the picked faces, not the piece
+        const c = this.folded.mesh.geometry.attributes.color, blue = new THREE.Color(0x4f8cff), set = new Set(picked);
+        this.folded.triFace.forEach((f, t) => {
+          if (model.faces[f].piece !== this.folded.selectedPiece || set.has(f)) return;
+          const colour = this.folded.base[f];
+          for (let k = 0; k < 3; k++) c.setXYZ(3 * t + k, colour.r, colour.g, colour.b);
+        });
+        this.folded.triFace.forEach((f, t) => { if (set.has(f)) for (let k = 0; k < 3; k++) c.setXYZ(3 * t + k, blue.r, blue.g, blue.b); });
+        c.needsUpdate = true;
+      }
+    };
+    for (const m of palette.entries) {
       const button = document.createElement("button"), chip = document.createElement("i");
       button.type = "button"; button.title = `${m.name}${m.spare ? " (spare in the palette)" : ""}`;
       chip.style.background = m.color; button.append(chip, m.id);
       button.addEventListener("click", () => { if (picked.length) assign(picked, m.id); });
       swatches.append(button);
     }
-    this.recolourPicked = piece => {
+    this.recolourPicked = face => {
       if (bar.hidden) return;
-      twins ||= this.model.findTwins();
-      picked = this.palette.pick(this.model, piece, scope.value, twins);
-      this.folded.relatedPieces = picked.filter(p => p !== piece);
-      this.folded.paint(piece, this.folded.selectedFace);
-      summary();
+      twins ||= model.findTwins();
+      clicked = face;
+      picked = palette.pick(model, face, scope.value, twins);
+      mark(); summary();
     };
-    scope.addEventListener("change", () => { if (picked.length) this.recolourPicked(picked[0]); });
+    scope.addEventListener("change", () => { if (clicked !== null) this.recolourPicked(clicked); });
     undo.addEventListener("click", () => {
       const was = history.pop(); if (!was) return;
-      for (const [p, m] of was) assign([p], m, false);
-      summary();
+      const pieces = new Set();
+      for (const [i, m] of was) palette.setFaces(model, [i], m).forEach(p => pieces.add(p));
+      refresh([...pieces]); mark();
     });
     save.addEventListener("click", () => {
       const link = document.createElement("a");
-      link.href = URL.createObjectURL(new Blob([this.palette.csv(this.model)], {type: "text/csv"}));
+      link.href = URL.createObjectURL(new Blob([palette.csv(model)], {type: "text/csv"}));
       link.download = "recolour.csv"; link.click(); URL.revokeObjectURL(link.href);
-      label.textContent = `Saved recolour.csv: put it in data/${modelName || "<model>"}/ and run make recolour, then make export and re-nest.`;
+      const split = palette.split(model);
+      label.textContent = `Saved recolour.csv: put it in data/${modelName || "<model>"}/ and run make recolour, then make export and re-nest.`
+        + (split.length ? ` Split pieces: make segment PIECES=${split.join(",")} cuts them apart.` : "");
     });
     copy.addEventListener("click", async () => {
-      try { await navigator.clipboard.writeText(this.palette.yaml(this.model)); label.textContent = "materials: list copied; it replaces the one in the YAML (comments in it are not kept)."; }
+      try { await navigator.clipboard.writeText(palette.yaml(model)); label.textContent = "materials: list copied; it replaces the one in the YAML (comments in it are not kept)."; }
       catch { label.textContent = "The browser would not copy; use Save recolour.csv and make recolour."; }
     });
     document.getElementById("recolour-open").addEventListener("click", () => {
       bar.hidden = !bar.hidden;
-      if (bar.hidden) { picked = []; this.folded.relatedPieces = []; this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace); }
-      else if (this.folded.selectedPiece) this.recolourPicked(this.folded.selectedPiece);
+      if (bar.hidden) { picked = []; clicked = null; this.folded.relatedPieces = []; this.folded.paint(this.folded.selectedPiece, this.folded.selectedFace); }
+      else if (this.folded.selectedFace !== null && this.folded.selectedFace !== undefined) this.recolourPicked(this.folded.selectedFace);
       summary();
     });
     document.getElementById("recolour-close").addEventListener("click", () => document.getElementById("recolour-open").click());
     // A recolour not yet written into the YAML comes back on reload.
     let saved = [];
     try { saved = JSON.parse(localStorage.getItem(key) || "[]"); } catch {}
-    for (const [piece, material] of saved)
-      if (this.model.pieces[piece] && this.palette.byId.has(material)) assign([piece], material, false);
+    const restored = new Set();
+    for (const [id, material] of saved) {
+      const i = palette.faceIndex.get(id);
+      if (i === undefined || !palette.byId.has(material)) continue;
+      addFilterOption(material);
+      palette.setFaces(model, [i], material).forEach(p => restored.add(p));
+    }
+    if (restored.size) refresh([...restored]);
     summary();
   }
   select(face, from, recenter = true) {
@@ -2293,7 +2397,7 @@ class Viewer {
       this.pattern.showCrops([f.piece], null, `${f.piece} · ${this.model.pieces[f.piece]?.material || ""} cardstock`);
     } else this.folded.focus(face);
     this.describe(f);
-    if (this.recolourPicked) this.recolourPicked(f.piece);
+    if (this.recolourPicked) this.recolourPicked(face);
     if (from === "3d" || from === "svg")
       window.parent.postMessage({type: "fold3d-select-piece", piece: f.piece}, location.origin);
   }
@@ -2373,7 +2477,7 @@ class Viewer {
     if (!append) info.innerHTML = "";
     const h = document.createElement("h2");
     const faceIndex = this.model.faces.indexOf(f);
-    h.textContent = `${f.piece} · face ${f.id.split("/")[1]} · ${this.model.isTab(faceIndex) ? "tab · white" : `${piece.material} cardstock`}`;
+    h.textContent = `${f.piece} · face ${f.id.split("/")[1]} · ${this.model.isTab(faceIndex) ? "tab · white" : `${this.model.materialOf(f)} cardstock${f.material ? ` (piece ${piece.material}: split here)` : ""}`}`;
     info.append(h);
     for (const note of piece.review || []) {
       const p = document.createElement("div"); p.className = "note"; p.textContent = `To judge: ${note}`; info.append(p);

@@ -17,9 +17,10 @@
 #                   The export numbers the pieces in this order unless the YAML says export: numbers: pages
 #   make palette   data/<project>/palette.json for the viewer's Recolour: every material and the
 #                   spare YAML `palette:` colours, so the viewer colours pieces as the YAML says now
-#   make recolour   write the viewer's data/<project>/recolour.csv (piece,material; RECOLOUR=path)
-#                   into the YAML `materials:` pieces lists, then refresh palette.json; follow with
-#                   make export and a re-nest (papercraft: make nest)
+#   make recolour   write the viewer's data/<project>/recolour.csv (piece,material; a row names a piece
+#                   or one face, piece-04-06/5; RECOLOUR=path) into the YAML `materials:` pieces and
+#                   faces lists, then refresh palette.json; follow with make export and a re-nest
+#                   (papercraft: make nest). Pieces split by face colour are cut with make segment
 #   make export-check  rebuild the synthetic fixture in fixtures/export/ and check it against the
 #                   export contract (report/export-contract.qmd)
 #   make segment PIECES=piece-11-04,piece-11-05  (or MATERIAL=green) re-cut those pieces and their
