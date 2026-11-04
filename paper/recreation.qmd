@@ -117,7 +117,9 @@ edges meet, not where the piece goes on the mask.
 detail such as the nose, teeth, eyebrows and hair is split into small pieces with short edges:
 41 seams are shorter than 15 mm *(check: seam count from segment.py)*. A short seam has little
 glue area, is hard to press closed from inside, and breaks first; in our build the green nose
-came apart at exactly these seams.
+came apart at exactly these seams. It was held together with clear tape, the kind used for
+wrapping presents, which works but is not ideal: it shows, and taping across the scored folds of
+small pieces is fiddly.
 
 **Narrow tabs.** The printed tabs are narrow and are drawn on one side of each seam. The builder
 uses 15 mm double-sided tape, the width readily available, and wants tabs that take it
