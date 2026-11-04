@@ -22,6 +22,7 @@ title: "Reference"
 | `make` | Convert every page in the manifest into `data/<project>/<project>.svg` |
 | `make page PAGE=4` | Convert one page into `output/<project>/page-4/` |
 | `make export` | Last step: `data/<project>/<project>-export.svg` with short glue-pair labels and cardstock fills, see [Export SVG contract](export-contract.qmd) |
+| `make assembly` | Build order from the folded model: `data/<project>/assembly.json` and `assembly.csv`, see [Build order](usage.qmd#build-order) |
 | `make export-check` | Rebuild the synthetic export fixture and check it against the contract |
 | `make install` | Install the Python dependencies |
 | `make report` | Render this site into `report/_site` |
@@ -68,6 +69,9 @@ tabs:                      # optional: glue tabs generated at export (default on
   gap_mm: 1                # clearance between two tabs of one piece
   keep: [green]            # materials already cut: keep their traced tabs
 # tabs: false              # keep the PDF's traced tabs everywhere
+
+export:                    # optional
+  numbers: build           # piece numbers in build order (make assembly); pages: page order, for pieces already cut
 
 reference:                 # optional: the finished model, checked by the 3D fold
   parts: 1                 # glues into one piece

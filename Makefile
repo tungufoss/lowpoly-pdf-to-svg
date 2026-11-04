@@ -12,6 +12,9 @@
 #   make export     last step: data/<project>/<project>-export.svg with short edge labels (2A instead
 #                   of 558, one per glue pair) and pieces filled in their cardstock colour; the key
 #                   from label to PDF number goes to <project>-labels.csv
+#   make assembly   build order from the folded model (fold3d.json): far from the neck first, twins
+#                   together; data/<project>/assembly.json (the viewer's Assemble player) and assembly.csv.
+#                   The export numbers the pieces in this order unless the YAML says export: numbers: pages
 #   make export-check  rebuild the synthetic fixture in fixtures/export/ and check it against the
 #                   export contract (report/export-contract.qmd)
 #   make segment PIECES=piece-11-04,piece-11-05  (or MATERIAL=green) re-cut those pieces and their
@@ -33,7 +36,7 @@ DPI     ?= 180
 SOURCES := $(filter-out %/export.py %/fold3d.py,$(wildcard src/lowpoly_pdf_to_svg/*.py))
 CONVERT  = $(PYTHON) -m src.lowpoly_pdf_to_svg --config $(CONFIG) --output $(OUT) --dpi $(DPI)
 
-.PHONY: all page redo piece number fix export export-check segment partition example install clean
+.PHONY: all page redo piece number fix export export-check assembly segment partition example install clean
 
 all: $(OUT)/$(PROJECT).svg
 
@@ -64,8 +67,12 @@ fix:
 
 export: $(OUT)/$(PROJECT)-export.svg
 
-$(OUT)/$(PROJECT)-export.svg: $(OUT)/$(PROJECT).svg $(CONFIG) src/lowpoly_pdf_to_svg/export.py src/lowpoly_pdf_to_svg/retab.py
+$(OUT)/$(PROJECT)-export.svg: $(OUT)/$(PROJECT).svg $(CONFIG) src/lowpoly_pdf_to_svg/export.py src/lowpoly_pdf_to_svg/retab.py src/lowpoly_pdf_to_svg/assembly.py
 	$(PYTHON) -m src.lowpoly_pdf_to_svg.export --config $(CONFIG) --output $(OUT)
+
+assembly:
+	@test -f $(OUT)/fold3d.json || { echo "run make -f fold3d.mk first"; exit 2; }
+	$(PYTHON) -m src.lowpoly_pdf_to_svg.assembly --fold3d $(OUT)/fold3d.json
 
 SEGMENT ?= $(if $(MATERIAL),$(MATERIAL),segment)
 segment:
