@@ -33,8 +33,8 @@ abstract: |
   corrected using the mirror symmetry of the mask; the pieces are folded into a 3D mesh that an
   interactive viewer shows piece by piece; the mesh is re-segmented into fewer, larger pieces with
   darts; tabs are regenerated wider; pieces are renumbered in a build order that keeps tabs
-  reachable; and an evolutionary search nests the pieces on the builder's own paper size, with
-  the side that carries each tab as a free variable. On one designer mask, free for personal use (a 21-sheet US Letter
+  reachable; and an evolutionary search picks the re-segmentation that nests on the fewest sheets of
+  the builder's own paper size. On one designer mask, free for personal use (a 21-sheet US Letter
   template with 180 pieces) the recreation has 113 pieces and 16 instead of 41 seams shorter than
   15 mm, while needing one Letter sheet fewer despite wider tabs. We close with a model of total build
   time for cutting-machine builds, where sheets are ordered so that the previous sheet can be
@@ -89,7 +89,7 @@ Contributions:
 2. A pipeline that turns a ready-made template into an editable, fabrication-ready model: OCR of
    edge numbers corrected by mirror symmetry, a folded 3D mesh, an interactive viewer with an
    assembly player, re-segmentation with darts, generated wider tabs, build-order numbering and
-   evolutionary nesting with tab placement as a variable.
+   an evolutionary search for a segmentation that nests well.
 3. A model of total build time for cutting-machine builds, and sheet ordering that lets gluing
    overlap with cutting.
 4. A position on reuse: the software works on a template the builder obtained legitimately (bought, or free for
@@ -233,15 +233,20 @@ tabs all on one side make it easy to slide past the score line, so the pieces en
 and have to be pulled apart and glued again, and the glue weakens each time. The generator
 alternates them on every such seam. One exception is the teeth: they are narrow, so their tabs
 are placed on the tooth, pointing out, where they are easiest to reach. Elsewhere, which side of
-a seam gets the tab is a free choice, and the nesting uses it.
+a seam gets the tab is a free choice. Because it changes the outline of both pieces, it could
+be part of the nesting search as well.
+
+::: {.callout-note}
+Not built yet: the GA genome holds the partition only; tab side as a nesting variable is
+planned, constrained by alternation on centre seams and outward tabs on narrow pieces.
+:::
 
 ## Nesting on the builder's paper, with tab side as a variable
 
 Pieces are nested per colour on the builder's sheet size, here A4 instead of the template's
-Letter, by the C++ nester `papercraft-nester`. Because each seam's tab can sit on either piece,
-the outline of a piece is not fixed until the tabs are assigned; the evolutionary search treats
-the tab side of each seam as part of the genome, next to the partition, and scores the sheet
-count with a fast shelf-packing proxy, confirming the best candidates with the real nester
+Letter, by the C++ nester `papercraft-nester`. The evolutionary search over partitions
+scores the sheet count with a fast shelf-packing proxy that grows each piece by a tab margin,
+and the best candidates are confirmed with the real nester
 [cf. @jakobs1996 for genetic nesting of polygons]. On Bowser, nested on Letter for a like-for-like comparison, the recreation needs 21 sheets where
 the template's pieces, re-nested after recolouring, needed 22 *(check)*, although every tab is
 wider. The A4 run is still to do.
