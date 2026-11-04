@@ -16,7 +16,11 @@ finished review SVG:
 * mirrored: a twin's tab sits on the mirror edge of its twin's tab (mirror-mismatches.csv
   pairs the numbers), so left and right copies are cut alike;
 * interwoven where a piece glues to its own twin (the centre seam): there the tabs
-  alternate between the two pieces along the seam.
+  alternate between the two pieces along the seam, so the halves stay aligned while the glue
+  sets (the PDF does this on most centre seams, not all);
+* outward on narrow pieces listed under `tabs: outward:` (ids or patterns, e.g. teeth): every
+  seam they share with an unlisted piece carries its tab on the listed piece, where it is
+  easiest to reach. Seams between two listed pieces follow the rules above.
 
 Materials listed under `tabs: keep:` (cardstock already cut) keep their traced tabs, so a
 recut matches the pieces in hand. Everywhere else a tab stays on the side the PDF chose. Pairs that are not one tab and one
@@ -63,6 +67,8 @@ class TabStyle:
     flaps: list[str] = field(default_factory=list)  # stress points: piece ids (their seams) or PDF numbers
     extra_flaps: list[str] = field(default_factory=list)  # pieces (ids or patterns) whose plain glue edges
                                                           # get a flap too, beside the partner's tab
+    outward: list[str] = field(default_factory=list)  # narrow pieces (ids or patterns, e.g. teeth) that
+                                                      # carry the tab on every seam with an unlisted piece
     generate: bool = True      # false: keep the traced tabs, add only the extra flaps
 
     @classmethod
@@ -72,10 +78,10 @@ class TabStyle:
         if raw is False or (isinstance(raw, dict) and raw.get("generate") is False and not raw.get("extra_flaps")):
             return None
         raw = raw if isinstance(raw, dict) else {}
-        lists = ("keep", "flaps", "extra_flaps")
+        lists = ("keep", "flaps", "extra_flaps", "outward")
         style = cls(**{k: float(v) for k, v in raw.items()
                        if k in cls.__dataclass_fields__ and k not in lists + ("generate",)})
-        style.keep, style.flaps, style.extra_flaps = ([str(m) for m in raw.get(k) or []] for k in lists)
+        style.keep, style.flaps, style.extra_flaps, style.outward = ([str(m) for m in raw.get(k) or []] for k in lists)
         style.generate = raw.get("generate", True) is not False
         return style
 
@@ -220,6 +226,24 @@ class Retabber:
                 m.side = want
                 self.stats["mirrored to twin"] += 1
             m.mirror = None   # decided
+        self._outward(glues, shapes)
+
+    def _outward(self, glues: list[Glue], shapes) -> None:
+        """Listed narrow pieces (`tabs: outward:`, and their twins) own the tab on every seam they
+        share with an unlisted piece, so it points out of the narrow piece and stays reachable."""
+        listed = self._listed(self.style.outward, shapes)
+        for g in glues:
+            a, b = g.pieces
+            if (a in listed) != (b in listed):
+                want = a if a in listed else b
+                self.stats["outward"] += want != g.side
+                g.side = want
+
+    def _listed(self, names: list[str], shapes) -> set[str]:
+        """Piece ids matching the names or patterns (with or without `piece-`), plus their twins."""
+        patterns = [p if p.startswith("piece-") else f"piece-{p}" for p in names]
+        listed = {pid for pid in shapes if any(fnmatch(pid, pattern) for pattern in patterns)}
+        return listed | {self.twin[p] for p in listed if p in self.twin}
 
     # ---- geometry --------------------------------------------------------------------------
     def _tab(self, g: Glue, shapes: dict[str, PieceShape], placed: dict[str, list[Polygon]],
@@ -354,9 +378,7 @@ class Retabber:
         """A flap on every plain glue edge of the `extra_flaps` pieces (and their twins), folded from
         that piece onto its partner's face, while the partner keeps its tab: both pieces then hold
         the seam, a paper doll's flap on one side and the tab on the other."""
-        patterns = [p if p.startswith("piece-") else f"piece-{p}" for p in self.style.extra_flaps]
-        listed = {pid for pid in shapes if any(fnmatch(pid, pattern) for pattern in patterns)}
-        listed |= {self.twin[p] for p in listed if p in self.twin}
+        listed = self._listed(self.style.extra_flaps, shapes)
         return [Glue(g.number, g.tab, g.edge, g.kind, side=g.edge.piece) for g in glues if g.edge.piece in listed]
 
     def _rewrite(self, shapes: dict[str, PieceShape], glues: list[Glue], tab_lines, extras=()) -> None:

@@ -1,7 +1,7 @@
 ---
-title: "From Bought Pattern to Buildable Mask: Digitally Recreating a Commercial Papercraft Template for Cutting Machines"
+title: "From Ready-Made Pattern to Buildable Mask: Digitally Recreating a Papercraft Template for Cutting Machines"
 # Alternatives:
-#   "Rebuilding a Commercial Papercraft Template: Readable Labels, Fewer Seams, Wider Tabs"
+#   "Rebuilding a Ready-Made Papercraft Template: Readable Labels, Fewer Seams, Wider Tabs"
 #   "Papercraft Templates Are Not Fabrication Plans: A Case Study in Digital Recreation"
 categories:
   - Digital fabrication
@@ -22,18 +22,19 @@ format:
         icon: file-pdf
         href: recreation.pdf
 abstract: |
-  Commercial low-poly papercraft masks are sold as printable PDF templates. They are designed for
+  Low-poly papercraft masks are distributed by their designers, for sale or free for personal
+  use, as printable PDF templates. They are designed for
   printing and cutting by hand, and they carry assumptions that become drawbacks once a builder
   uses a cutting machine: edge numbers in a font too small to read (and to OCR), many small
   pieces and short seams that are hard to glue and keep closed, narrow glue tabs, a fixed paper
   size, a fixed colour per page, and no three-dimensional reference for where a piece goes. We
   describe an open-source pipeline that recreates such a template digitally, from the PDF the
-  builder bought, and then rebuilds it for fabrication. Edge numbers are read by OCR and
+  builder obtained from the designer, and then rebuilds it for fabrication. Edge numbers are read by OCR and
   corrected using the mirror symmetry of the mask; the pieces are folded into a 3D mesh that an
   interactive viewer shows piece by piece; the mesh is re-segmented into fewer, larger pieces with
   darts; tabs are regenerated wider; pieces are renumbered in a build order that keeps tabs
-  reachable; and an evolutionary search nests the pieces on the builder's own paper size, with
-  the side that carries each tab as a free variable. On one commercial mask (a 21-sheet US Letter
+  reachable; and an evolutionary search picks the re-segmentation that nests on the fewest sheets of
+  the builder's own paper size. On one designer mask, free for personal use (a 21-sheet US Letter
   template with 180 pieces) the recreation has 113 pieces and 16 instead of 41 seams shorter than
   15 mm, while needing one Letter sheet fewer despite wider tabs. We close with a model of total build
   time for cutting-machine builds, where sheets are ordered so that the previous sheet can be
@@ -55,42 +56,52 @@ from Helga, 2026-11-04; tracked in issue #85. Notes in callouts are to-dos and c
 submission. Numbers marked *(check)* come from pipeline outputs on 2026-11-04 and must be
 regenerated from committed summary files before submission. Figures will be R/tidyverse chunks
 reading summary CSVs, never the template's pages: the creator's terms allow personal use only,
-so the paper shows no page scans and no pieces of the purchased template, only our own drawings
+so the paper shows no page scans and no pieces of the designer's template, only our own drawings
 and counts. Open work: #86 (sheet order), #87 (build-time model), #88 (recolour palette).
 :::
 
 # Introduction
 
-Papercraft masks and helmets made of low-poly cardstock are a popular craft. Designers sell them
-as PDF templates: a set of printable pages with the unfolded pieces, cut lines, fold lines, glue
+Papercraft masks and helmets made of low-poly cardstock are a popular craft. Designers sell them,
+or give them away for personal use, as PDF templates: a set of printable pages with the unfolded pieces, cut lines, fold lines, glue
 tabs and small numbers that tell the builder which edge glues to which. The format is made for a
 home printer, scissors and a scoring tool. Many builders now own a cutting machine (Cricut,
 Silhouette, Brother ScanNCut) that can cut, score and draw on cardstock, but the template is
 still a picture: the machine cannot use it until someone traces it, and the template's design
 choices, made for hand cutting, stay in place.
 
-This paper is a case study of that gap. One of us bought a commercial template for a low-poly
-Bowser mask and built it with a Cricut. Doing so exposed a list of practical problems that have
+This paper is a case study of that gap. One of us downloaded a designer's template for a low-poly
+mask of Bowser, the villain of Nintendo's *Super Mario* games, and built it with a Cricut. The
+template is by Papercraft Cat (© 2017 Remy Del Toro) and is free for personal use: a 24-page US
+Letter PDF with 21 sheets of pieces. Bowser is a character and
+trademark of Nintendo; the template is a fan design, and this paper uses it only as a case
+study. Doing so exposed a list of practical problems that have
 little to do with the quality of the design and a lot to do with the template being a fixed,
 printed artefact (@sec-problem). We then describe an open-source pipeline,
 `lowpoly-pdf-to-svg`, that recreates the template digitally and uses the recreation to fix those
 problems (@sec-method), and we look at a part of the build that templates ignore entirely: the
 time it takes, and how the order of the sheets changes it (@sec-time).
 
+![The Bowser mask built from the template at 100 % scale, worn by an adult of about 1.95 m. It rests on the shoulders, and the snout reaches below the shoulder line. Mask design: Papercraft Cat, © 2017 Remy Del Toro.](figures/bowser-worn.jpg){#fig-worn width=60%}
+
+<!-- Figure files live in the private papercraft repo (docs/paper/figures/) and are served next to this page; they are not in this public repo. -->
+
+
 Contributions:
 
-1. A list of the drawbacks of commercial papercraft templates when the build uses a cutting
+1. A list of the drawbacks of ready-made papercraft templates when the build uses a cutting
    machine, drawn from a full build and from builder forums.
-2. A pipeline that turns a purchased template into an editable, fabrication-ready model: OCR of
+2. A pipeline that turns a ready-made template into an editable, fabrication-ready model: OCR of
    edge numbers corrected by mirror symmetry, a folded 3D mesh, an interactive viewer with an
    assembly player, re-segmentation with darts, generated wider tabs, build-order numbering and
-   evolutionary nesting with tab placement as a variable.
+   an evolutionary search for a segmentation that nests well.
 3. A model of total build time for cutting-machine builds, and sheet ordering that lets gluing
    overlap with cutting.
-4. A position on reuse: the software works on a template the builder bought, for personal edits;
+4. A position on reuse: the software works on a template the builder obtained legitimately (bought, or free for
+   personal use), for personal edits;
    it does not redistribute the designer's PDF or pages.
 
-# The problem: what a bought template gets in the way of {#sec-problem}
+# The problem: what a ready-made template gets in the way of {#sec-problem}
 
 ::: {.callout-note collapse="true"}
 ## To do
@@ -107,31 +118,58 @@ them (5 %) were not read with confidence, and 675 needed a correction of some ki
 edge had a partner *(check)*. For the builder the number also says little: it tells which two
 edges meet, not where the piece goes on the mask.
 
+**Labels that lead nowhere.** Not every printed number has a partner. Around one of the eye
+openings, edges that border the opening, and so meet no other piece, still carry a number and a
+tab; the builder looks for a matching edge that does not exist, and cuts the tabs off once it is
+clear none is needed. In the edge table of the Bowser template 6 numbers stay unpaired after
+correction *(check)*. In the recreation, every edge is either glued in the folded mesh or lies on
+an opening; unpaired numbers are listed on the check page for review, and the export gives short
+labels only to glued pairs. The pipeline first traced these tabs like any other; once the review
+made clear they were an error in the template, they were removed in the piece editor and the
+removal is recorded, so later exports keep them out.
+
 **Many small pieces and short seams.** The template has 180 pieces on 21 sheets. Low-poly
 detail such as the nose, teeth, eyebrows and hair is split into small pieces with short edges:
 41 seams are shorter than 15 mm *(check: seam count from segment.py)*. A short seam has little
 glue area, is hard to press closed from inside, and breaks first; in our build the green nose
-came apart at exactly these seams.
+came apart at exactly these seams. It was held together with clear tape, the kind used for
+wrapping presents, which works but is not ideal: it shows, and taping across the scored folds of
+small pieces is fiddly.
 
 **Narrow tabs.** The printed tabs are narrow and are drawn on one side of each seam. The builder
-used 15 mm double-sided tape cut into strips, which wants 7.5 mm tabs, and wider flaps where the
-load is high.
+uses 15 mm double-sided tape, the width readily available, and wants tabs that take it
+with a single lengthwise cut (7.5 mm), with full-width flaps where the load is high. A printed
+template cannot adapt its tabs to the builder's adhesive.
 
 **A fixed paper size.** The template is laid out on US Letter. European cardstock is A4, which is
 narrower and longer; pieces near the edge of a Letter page do not fit, and the pages cannot
 simply be scaled without changing the size of the mask.
 
 **A fixed colour per page.** Each page is one colour. Changing the colour of a few parts (here:
-gold horns, rust hair and eyebrows, a red mouth, brown horn rings) moves pieces between colours,
-so the designed pages cannot be cut as they are and have to be rearranged by hand.
+gold horns, rust hair and eyebrows, a red mouth, brown horn rings) moves pieces between colours.
+With the printed template the only option is to cut the whole page again on the other colour of
+cardstock for the few pieces that changed, and most of that sheet becomes unnecessary offcut.
 
 **No 3D reference.** The template shows a picture of the finished mask and the flat pieces, but
 not where a given piece sits, which side faces out, or what to glue first. Builders work this
-out from the numbers.
+out from the numbers. Pieces that join usually sit on the same page or a nearby one, which
+helps, but nothing says which page to start with.
 
-**A fixed order.** Page order is the designer's layout order, not an order that is easy to
-build. The builder found it much easier to assemble the hair and eyebrows first and then fit them
-into the larger head pieces, while the tabs could still be reached and pressed.
+**A fixed order.** Pages come in colour order, all red pages, then green, then yellow, because
+each page is one colour. This looks like the default of the unfolding software rather than a
+choice for building: the line styles and edge numbering suggest Pepakura Designer, which lays
+out the unfolded parts on printable pages and numbers matching edges automatically. Colour order is not an order that is easy to build: neighbouring parts of the
+mask are often different colours, so in practice the builder moves between colours as the parts
+meet on the mask. The builder found it much easier to assemble the hair and eyebrows first and then fit them
+into the larger head pieces, while the tabs could still be reached and pressed. The mouth is
+similar: the teeth go in while the cheeks and upper lip are being joined, then the red tongue,
+and only then is the chin closed.
+
+::: {.callout-note}
+To check and discuss: which tool made the template (Pepakura is a guess from the line styles and
+three-digit edge numbers), and what its page-layout logic is (grouping by face colour, packing
+within a colour, how the designer can override it). Cite the Pepakura documentation.
+:::
 
 # Method: recreating the template digitally {#sec-method}
 
@@ -142,7 +180,7 @@ subsection. One own-drawn figure for the pipeline, one for the notation, one for
 (screenshot of our own generated model, not the template).
 :::
 
-A pipeline figure (to draw) will show the stages. The input is the PDF the builder bought and a short
+A pipeline figure (to draw) will show the stages. The input is the PDF the builder obtained and a short
 YAML file per model (paper size, fold styles, colours). Everything after vectorization works on
 our own representation, so later stages never need the PDF again.
 
@@ -171,7 +209,20 @@ With every edge paired, the pieces are folded into a 3D mesh (fold3d): each piec
 planar faces joined at its fold lines, and glued edges are brought together. The mesh drives a
 local Three.js viewer in which the builder can click a piece in 3D and see it on the flat sheet
 and vice versa, filter by cardstock, search by number, and switch the labels between the PDF
-numbers and the new short labels.
+numbers and the new short labels (@fig-viewer).
+
+![The interactive viewer. Left: the folded model in its cardstock colours, with the MakeHuman head and torso inside for scale. Right: the flat pieces on their sheets; clicking a face in one view selects it in the other. The toolbar filters by cardstock, finds a number, switches between PDF numbers and Cricut labels, and runs the Assemble player. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/viewer.jpg){#fig-viewer}
+
+## Fitting the mask to a head
+
+At 100 % the mask is far larger than a head (@fig-worn). The folded mesh makes the size a choice:
+a head model (MakeHuman base mesh, child, female or male, set in the YAML) is placed upright with
+its pupils behind the mask's eye openings, and the smallest scale at which the head fits is
+reported, together with where to cut sight holes (@fig-headfit). For Bowser the fits are about
+74 % (female), 77 % (male) and 67 % (child) *(check)*.
+
+![Head fit for a female head: the mask at 74 %, front and side views. Grey: cardstock; blue: head; red: pupils and line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
+
 
 ## Re-segmentation with darts
 
@@ -197,19 +248,33 @@ against green), where a cut is needed anyway.
 
 ## Wider tabs and flaps
 
-Tabs are regenerated rather than traced: 7.5 mm along the whole glue edge (half of a 15 mm
-tape strip), and 15 mm wide tongues on seams that carry load or are short. A tab never crosses a
-fold of the face it glues onto; it is clipped there. Twins carry mirrored tabs, except where a
-piece glues to its own twin, where tabs alternate sides. Which side of a seam gets the tab is a
-free choice, and the nesting uses it.
+Tabs are regenerated rather than traced, and their size is set per builder in the YAML file
+(`tabs: depth_mm`, `flap_mm`) to match the adhesive they have at hand. Our builder had 15 mm
+double-sided tape readily available, so the defaults follow it: tabs are 7.5 mm deep along the
+whole glue edge, so that a strip of tape cut once lengthwise covers two tabs, and 15 mm wide
+tongues, one full tape width, sit on seams that carry load or are short. On a mask this large,
+with this many parts, the wider glue area is what keeps the seams closed. A tab never crosses a
+fold of the face it glues onto; it is clipped there. Twins carry mirrored tabs, except where a piece glues to its own twin, where tabs alternate
+sides along the seam. The template does this on most centre seams but not all of them, and in
+the build it matters: alternating tabs hold the two halves in line while the glue sets, whereas
+tabs all on one side make it easy to slide past the score line, so the pieces end up misaligned
+and have to be pulled apart and glued again, and the glue weakens each time. The generator
+alternates them on every such seam. One exception is the teeth: they are narrow, so their tabs
+are placed on the tooth, pointing out, where they are easiest to reach. Elsewhere, which side of
+a seam gets the tab is a free choice. Because it changes the outline of both pieces, it could
+be part of the nesting search as well.
+
+::: {.callout-note}
+Not built yet: the GA genome holds the partition only; tab side as a nesting variable is
+planned, constrained by alternation on centre seams and outward tabs on narrow pieces.
+:::
 
 ## Nesting on the builder's paper, with tab side as a variable
 
 Pieces are nested per colour on the builder's sheet size, here A4 instead of the template's
-Letter, by the C++ nester `papercraft-nester`. Because each seam's tab can sit on either piece,
-the outline of a piece is not fixed until the tabs are assigned; the evolutionary search treats
-the tab side of each seam as part of the genome, next to the partition, and scores the sheet
-count with a fast shelf-packing proxy, confirming the best candidates with the real nester
+Letter, by the C++ nester `papercraft-nester`. The evolutionary search over partitions
+scores the sheet count with a fast shelf-packing proxy that grows each piece by a tab margin,
+and the best candidates are confirmed with the real nester
 [cf. @jakobs1996 for genetic nesting of polygons]. On Bowser, nested on Letter for a like-for-like comparison, the recreation needs 21 sheets where
 the template's pieces, re-nested after recolouring, needed 22 *(check)*, although every tab is
 wider. The A4 run is still to do.
@@ -231,7 +296,7 @@ manual rearrangement of pages. A palette in the YAML and recolouring in the view
 The new labels replace the template's three-digit edge numbers with short two-character labels
 in a 5 mm font, and each piece gets a piece number up to 10 mm high in its middle. Twins share
 the number; the frame tells them apart: a circle on the copy on the wearer's right, a square on
-the wearer's left (looking into the mask, circles are on the right; from outside, on the left), and a triangle (with an A prefix) for a piece that crosses the middle and so
+the wearer's left (looking into the mask, circles are on the right; from outside, on the left), and a triangle for a piece that crosses the middle and so
 exists once.
 
 All marks are on the inside of the mask. The builder lays the cardstock good side down on the
@@ -307,7 +372,7 @@ steps reduces the idle time (#86).
 
 # Conclusion
 
-A bought papercraft template is a good design delivered in a format that fixes paper size,
+A ready-made papercraft template is a good design delivered in a format that fixes paper size,
 colour, piece count, tab width and build order. Recreating it digitally, with symmetry to make
 the reading reliable and the folded mesh as the shared reference, lets the builder change all of
 these for their own use while keeping the designer's shape.
