@@ -116,7 +116,7 @@ glue area, is hard to press closed from inside, and breaks first; in our build t
 came apart at exactly these seams.
 
 **Narrow tabs.** The printed tabs are narrow and are drawn on one side of each seam. The builder
-uses 15 mm double-sided tape, the width she has readily available, and wants tabs that take it
+uses 15 mm double-sided tape, the width readily available, and wants tabs that take it
 with a single lengthwise cut (7.5 mm), with full-width flaps where the load is high. A printed
 template cannot adapt its tabs to the builder's adhesive.
 
