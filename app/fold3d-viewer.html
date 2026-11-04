@@ -1064,6 +1064,19 @@ class FoldedView {
     this.updateDiagnosticLines();
     this.updateLabelVisibility();
   }
+  // The outline of the step's pieces drawn through everything, so a piece tucked under the hair still shows.
+  outlineBuildStep(pieces) {
+    if (this.buildOutline) { this.scene.remove(this.buildOutline); this.buildOutline.geometry.dispose(); this.buildOutline = null; }
+    if (!pieces?.length) return;
+    const faces = pieces.flatMap(piece => (this.model.facesOf.get(piece) || []).map(i => this.model.faces[i]));
+    const V = this.model.vertices, geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(
+      pieceBoundaryEdges(faces).flatMap(({a, b}) => [...V[a], ...V[b]]), 3));
+    this.buildOutline = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({color: 0x1f6feb,
+      depthTest: false, transparent: true, opacity: 0.9}));
+    this.buildOutline.renderOrder = 10;
+    this.scene.add(this.buildOutline);
+  }
   paint(piece, face) {
     this.selectedPiece = piece; this.selectedFace = face;
     const relatedFaces = new Set();
@@ -1964,6 +1977,10 @@ class Viewer {
     open.addEventListener("click", () => {
       document.getElementById("pair-bar").hidden = true;
       if (filter.value) { filter.value = ""; filter.dispatchEvent(new Event("change")); }
+      // The see-through head would hide the pieces being glued (and is blue, like the new piece).
+      const head = document.getElementById("show-head");
+      this.headBeforeBuild = head.checked;
+      if (head.checked) { head.checked = false; head.dispatchEvent(new Event("change")); }
       bar.hidden = false; this.folded.fitMirrorCenter(); this.showBuild(1);
     });
     const go = to => { stop(); this.showBuild(to); };
@@ -1982,7 +1999,10 @@ class Viewer {
     play.addEventListener("click", toggle);
     document.getElementById("build-close").addEventListener("click", () => {
       stop(); bar.hidden = true; this.folded.setBuilt(null); this.folded.relatedPieces = []; this.folded.buildCurrent = null;
+      this.folded.outlineBuildStep(null);
       this.folded.paint(null, null); this.pattern.paint(null, null); this.folded.fitMirrorCenter();
+      const head = document.getElementById("show-head");
+      if (this.headBeforeBuild && !head.checked) { head.checked = true; head.dispatchEvent(new Event("change")); }
     });
     document.addEventListener("keydown", e => {
       if (bar.hidden || !this.editor.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
@@ -2008,6 +2028,7 @@ class Viewer {
     const step = steps[this.buildAt - 1], [piece, ...twins] = step.pieces;
     this.folded.setBuilt(new Set(steps.slice(0, this.buildAt).flatMap(s => s.pieces)));
     this.folded.relatedPieces = twins; this.folded.buildCurrent = new Set(step.pieces);
+    this.folded.outlineBuildStep(step.pieces);
     this.folded.paint(piece, null); this.pattern.paint(piece, null);
     this.folded.focusPiece(step.pieces); this.pattern.focus(piece);
     const names = this.pieceNames(step.pieces).join(" ");
