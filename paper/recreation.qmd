@@ -230,14 +230,15 @@ manual rearrangement of pages. A palette in the YAML and recolouring in the view
 
 The new labels replace the template's three-digit edge numbers with short two-character labels
 in a 5 mm font, and each piece gets a piece number up to 10 mm high in its middle. Twins share
-the number; the frame tells them apart: a circle on the copy on one side of the mask, a square
-on the other, and a triangle (with an A prefix) for a piece that crosses the middle and so exists
-once.
+the number; the frame tells them apart: a circle on the copy on the wearer's right, a square on
+the wearer's left, and a triangle (with an A prefix) for a piece that crosses the middle and so
+exists once.
 
-::: {.callout-note}
-Check which side is which: the export gives the circle to the copy with the smaller x in the
-folded model. State it in the builder's terms (wearer's left or right).
-:::
+All marks are on the inside of the mask. The builder lays the cardstock good side down on the
+cutting mat, so the machine's pen draws labels and numbers on the back, which becomes the inside;
+the visible surface stays clean, as it would with a hand-cut template whose printed lines are
+folded inwards. The viewer draws the labels on both sides of each face, so the builder can read
+them while turning the model, from outside as well as through the neck opening.
 
 Pieces are numbered in build order. The order sweeps from the parts farthest from the neck
 towards the neck, adds twins together, and prefers continuing from the last step; so hair and

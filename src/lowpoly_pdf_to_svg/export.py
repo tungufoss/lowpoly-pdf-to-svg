@@ -530,7 +530,8 @@ def _clearance(p: tuple[float, float], segments: list[tuple[tuple[float, float],
 class PieceNumbers:
     """A number in the middle of every piece, for finding pieces on the cut sheet. Pieces are
     numbered 1, 2, ... in piece order (page, then piece); a mirror twin (mirror-mismatches.csv)
-    shares its twin's number. The left copy gets a circle and the right a square, using the
+    shares its twin's number. The copy with the smaller x (the wearer's right; fold3d poses the face
+    towards +z with y up) gets a circle and the other a square, using the
     folded model's x positions when available (source order is the fallback before folding).
     An unpaired piece keeps its sequence slot with an A prefix and a triangle."""
 
