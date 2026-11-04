@@ -12,7 +12,8 @@ folds while every piece still lies flat without overlapping itself and fits the 
 * `Segmenter`: greedy best-first merging; each merge is applied to both mirror twins and
   kept only if the merged pieces still lie flat and fit the sheet.
 
-Only colour boundaries are fixed: faces of different cardstock never merge. The PDF's
+Only colour boundaries are fixed: faces of different cardstock never merge. Colours come from the
+YAML next to fold3d.json, so a face recoloured in the viewer (YAML `faces:`) splits its piece. The PDF's
 pieces are rebuilt the same way (`Segmentation.from_pieces`) as the baseline to compare.
 """
 
@@ -31,6 +32,7 @@ from scipy.spatial import cKDTree
 from shapely.geometry import MultiPoint, Polygon
 from shapely.ops import unary_union
 
+from .palette import yaml_colours
 from .stress import SeamLoad
 
 CLUSTER_MM = 1.0      # 3D corners this close are one vertex
@@ -87,7 +89,8 @@ class Mesh:
             if len(corners) > 1 and corners[0] == corners[-1]:
                 corners.pop(), flat.pop()
             if len(corners) >= 3:
-                material = data["pieces"].get(f["piece"], {}).get("material", "")
+                material = (data.get("face_material", {}).get(f["id"])
+                            or data["pieces"].get(f["piece"], {}).get("material", ""))
                 self.faces.append(Face(f["id"], f["piece"], material, corners, np.array(flat, float)))
         self.edge_faces: dict[frozenset, list[tuple[int, int]]] = defaultdict(list)
         for i, face in enumerate(self.faces):
@@ -683,8 +686,10 @@ class Report:
             for edge, faces in mesh.edge_faces.items():
                 if any(f in region for f, _ in faces):
                     (cuts if seg.edge_kind(edge) != "fold" else folds).append(mesh.points[list(edge)])
-            ax.add_collection3d(Line3DCollection(folds, colors="#777", linewidths=0.4, linestyles="dashed"))
-            ax.add_collection3d(Line3DCollection(cuts, colors="black", linewidths=1.4))
+            if folds:   # none when every piece is a single face (a recolour split one up)
+                ax.add_collection3d(Line3DCollection(folds, colors="#777", linewidths=0.4, linestyles="dashed"))
+            if cuts:
+                ax.add_collection3d(Line3DCollection(cuts, colors="black", linewidths=1.4))
             ax.set_xlim(lo[0], hi[0]), ax.set_ylim(lo[1], hi[1]), ax.set_zlim(lo[2], hi[2])
             ax.set_box_aspect(hi - lo)
             ax.view_init(elev=15, azim=-60)
@@ -728,11 +733,15 @@ def main() -> int:
     ap.add_argument("--out", type=Path, help="output folder (default: data/<project>/segment/)")
     args = ap.parse_args()
     data = json.loads(args.fold3d.read_text(encoding="utf-8"))
+    split = yaml_colours(data, args.fold3d)   # recolours since the fold, single faces included
+    if split:
+        print(f"{split} faces coloured apart from their piece (YAML faces:): their pieces are split")
     mesh = Mesh(data)
     if not args.keep_shapes:
         print(f"symmetric mesh: corners moved up to {mesh.symmetrize():.1f} mm")
     chosen = {p for p in args.pieces.split(",") if p}
     chosen |= {p for p, v in data["pieces"].items() if args.material and v["material"] == args.material}
+    chosen |= {f["piece"] for f in data["faces"] if args.material and data.get("face_material", {}).get(f["id"]) == args.material}
     chosen |= {data["pieces"][p].get("twin") for p in chosen} - {None, ""}
     region = {i for i, f in enumerate(mesh.faces) if f.piece in chosen}
     if not region:

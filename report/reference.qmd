@@ -47,13 +47,20 @@ folds:                     # which printed line style is which fold
 output:
   default_sheet: a4        # a4 or 12x12 for nesting
 
+palette:                   # optional: cardstock on hand that no page uses yet; the viewer's
+  - id: blue               # Recolour offers these, and a material may leave out name/color
+    name: Blue cardstock   # to take them from here
+    color: "#1565c0"
+
 materials:                 # one entry per cardstock colour
   - id: red
     name: Red cardstock
     pages: [4, 5, 6, 7, 8, 9, 10]
   - id: brown
     name: Brown cardstock
+    color: "#6d4c41"       # optional fill; default by id (red, green, rust, gold, brown, ...)
     pieces: [piece-04-06, piece-05-06]   # cut from brown although page 4 and 5 are red
+    faces: [piece-04-07/2]   # single faces: the piece is split along the colour (make segment)
 
 tabs:                      # optional: glue tabs generated at export (default on)
   depth_mm: 7.5            # tab depth from its fold: half a 15 mm tape (the PDF's are about 5.6 mm)

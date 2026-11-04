@@ -37,6 +37,8 @@ from pathlib import Path
 import yaml
 
 from .assembly import AssemblyOrder
+# Cardstock colours: the YAML `color:`, else its `palette:` entry, else a named default.
+from .config import DEFAULT_COLORS, FALLBACK_COLOR, Palette  # noqa: F401  (DEFAULT_COLORS kept for importers)
 from .retab import Retabber, TabStyle
 
 SVG, INKSCAPE = "http://www.w3.org/2000/svg", "http://www.inkscape.org/namespaces/inkscape"
@@ -45,12 +47,6 @@ for prefix, uri in (("", SVG), ("xlink", "http://www.w3.org/1999/xlink"), ("inks
     ET.register_namespace(prefix, uri)
 LABEL = f"{{{INKSCAPE}}}label"
 
-# Cardstock colours used when the YAML material has no `color:`.
-DEFAULT_COLORS = {"red": "#c62828", "green": "#2e7d32", "yellow": "#f9d71c", "black": "#212121",
-                  "white": "#ffffff", "beige": "#e8d9b5", "blue": "#1565c0", "orange": "#ef6c00",
-                  "brown": "#6d4c41", "grey": "#9e9e9e", "gray": "#9e9e9e", "pink": "#f48fb1",
-                  "purple": "#6a1b9a", "rust": "#b7410e", "gold": "#d4a017"}
-FALLBACK_COLOR = "#cccccc"
 CONTRACT = "lowpoly-export/1"  # bump when the attributes below change meaning
 
 
@@ -236,9 +232,9 @@ class Materials:
         self.confirmed_joins = raw.get('export', {}).get('confirmed_joins', [])
         self.project = str(raw["project"])
         self.pdf = str(raw["source"]["pdf"])
-        self.names = {str(m["id"]): str(m["name"]) for m in raw["materials"]}
-        self.colors = {str(m["id"]): str(m.get("color") or DEFAULT_COLORS.get(str(m["id"]).lower(), FALLBACK_COLOR))
-                       for m in raw["materials"]}
+        palette = Palette(raw)
+        self.names = {str(m["id"]): palette.name(str(m["id"]), str(m.get("name") or "")) for m in raw["materials"]}
+        self.colors = {str(m["id"]): palette.color(str(m["id"]), str(m.get("color") or "")) for m in raw["materials"]}
 
     def color(self, material: str) -> str:
         return self.colors.get(material, FALLBACK_COLOR)
