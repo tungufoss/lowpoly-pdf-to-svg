@@ -165,6 +165,7 @@
   <label><input type="checkbox" id="show-scans" checked> page scans</label>
   <label><input type="checkbox" id="show-open" checked> <span class="open">open glues</span></label>
   <label><input type="checkbox" id="show-wrong" checked> <span class="wrong">folds bent the wrong way</span></label>
+  <label id="head-switch" hidden title="The head the mask is sized for (make headfit): MakeHuman base mesh, CC0"><input type="checkbox" id="show-head" checked> head</label>
 </header>
 <div id="pair-bar" role="toolbar" aria-label="Mirror pairs" hidden>
   <button type="button" data-step="-1" title="Previous pair (B)">◀ Back</button>
@@ -2033,6 +2034,22 @@ class Viewer {
   }
 }
 
+function addHead(folded, head) {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(head.vertices.flat(), 3));
+  geometry.setIndex(head.faces.flat());
+  geometry.computeVertexNormals();
+  const skin = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({color: 0x3f74b5, transparent: true,
+    opacity: 0.45, side: THREE.DoubleSide, depthWrite: false}));
+  skin.raycast = () => {};            // clicks go through the head to the card
+  skin.renderOrder = 1;
+  folded.scene.add(skin);
+  const toggle = document.getElementById("show-head");
+  document.getElementById("head-switch").hidden = false;
+  document.getElementById("head-switch").title += ` (${head.head} head, mask at ${Math.round(head.scale * 100)} %)`;
+  toggle.addEventListener("change", () => { skin.visible = toggle.checked; });
+}
+
 try {
   const labelsUrl = modelName ? `/api/labels?model=${encodeURIComponent(modelName)}` : "";
   const [data, svgText, exportText, cricutRows, edgeChecks] = await Promise.all([
@@ -2061,6 +2078,11 @@ try {
     const face = window.viewer.model.facesOf.get(event.data.piece)?.[0];
     if (face !== undefined) window.viewer.select(face, "parent");
   });
+  // The head fit (make headfit) next to fold3d.json, if there is one: a see-through head in the mask.
+  const headUrl = sameOrigin(params.get("head") || jsonUrl.replace(/fold3d\.json($|\?)/, "head-fit-mesh.json$1"), "head");
+  fetch(headUrl).then(r => r.ok ? r.json() : null).then(head => {
+    if (head) addHead(window.viewer.folded, head);
+  }).catch(() => {});
   if (window.parent !== window)
     window.parent.postMessage({type: "fold3d-ready"}, location.origin);
 } catch (err) {

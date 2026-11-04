@@ -10,6 +10,9 @@
 #                              pieces split by cardstock into glue units, and the glues between units
 #   make -f fold3d.mk view     serve app/fold3d-viewer.html on localhost: the glued model beside the
 #                              pattern, click a face in either to find it in the other (local only)
+#   make -f fold3d.mk headfit  fit the folded mask to a head (YAML `fit:`, HEAD=child|female|male
+#                              overrides it): head-fit.json with the scale, head-fit-views.svg and
+#                              head-fit-eyes.svg (A4, sight holes at 1:1); COMPARE=1 prints every preset
 #   make -f fold3d.mk install  extra Python dependencies (scipy, shapely, matplotlib)
 # Needs data/<project>/<project>.svg from a full `make` first.
 # Checkpoints after piece placement and reuses the pose on retries or geometry edits;
@@ -25,7 +28,7 @@ PORT    ?= 8000
 VIEW_ROOT ?= $(abspath $(OUT)/../..)
 VIEWER_PATH ?= $(if $(wildcard $(VIEW_ROOT)/app/fold3d-viewer.html),app/fold3d-viewer.html,tools/lowpoly-pdf-to-svg/app/fold3d-viewer.html)
 
-.PHONY: fold3d install plan view
+.PHONY: fold3d install plan view headfit
 fold3d: $(OUT)/fold3d.obj
 
 $(OUT)/fold3d.obj: $(OUT)/$(PROJECT).svg src/lowpoly_pdf_to_svg/fold3d.py src/lowpoly_pdf_to_svg/glueplan.py
@@ -33,6 +36,9 @@ $(OUT)/fold3d.obj: $(OUT)/$(PROJECT).svg src/lowpoly_pdf_to_svg/fold3d.py src/lo
 
 plan: $(OUT)/$(PROJECT).svg
 	$(PYTHON) -m src.lowpoly_pdf_to_svg.glueplan --config $(CONFIG)
+
+headfit:   # no rebuild: uses the fold3d.json there is
+	$(PYTHON) -m src.lowpoly_pdf_to_svg.headfit --config $(CONFIG) $(if $(HEAD),--head $(HEAD),) $(if $(filter 1,$(COMPARE)),--compare,)
 
 install:
 	$(PYTHON) -m pip install -r requirements-fold3d.txt
