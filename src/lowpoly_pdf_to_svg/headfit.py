@@ -40,10 +40,12 @@ from xml.sax.saxutils import escape
 #   breadth: ear to ear above the ears, length: brow to back of head, height: chin to crown.
 HEAD_PRESETS = {
 #   circumference: round the head just above the brow and ears, as a tape measure gives it.
-    "male":   dict(breadth=154.0, length=199.0, height=236.0, circumference=572.0, eye_distance=64.0),
-    "female": dict(breadth=146.0, length=187.0, height=221.0, circumference=549.0, eye_distance=62.0),
-    "child":  dict(breadth=140.0, length=177.0, height=200.0, circumference=525.0, eye_distance=56.0),
+    "male":   dict(breadth=154.0, length=199.0, height=236.0, circumference=572.0, eye_distance=64.0, stature=1804.0),
+    "female": dict(breadth=146.0, length=187.0, height=221.0, circumference=549.0, eye_distance=62.0, stature=1676.0),
+    "child":  dict(breadth=140.0, length=177.0, height=200.0, circumference=525.0, eye_distance=56.0, stature=1305.0),
 }
+# stature: body height in mm. Adults: Swedish 18-year-olds; child: Swedish 8-year-olds (Albertsson
+# Wikland et al., Acta Paediatr 2002;91:739-754). It sizes the shoulders and chest (`height_cm`).
 
 CHIN_BELOW_PUPILS = -0.49     # chin this far below the pupils, as a share of the head height
 SIGHT_HOLE_MM = 30.0            # default sight hole diameter
@@ -65,7 +67,9 @@ class HeadSize:
     height: float
     circumference: float
     eye_distance: float
+    stature: float = 1676.0
     name: str = "custom"
+    body_scale: float = 1.0      # shoulders and chest relative to the head's own scale
 
     @classmethod
     def from_fit(cls, fit: dict) -> "HeadSize":
@@ -80,6 +84,12 @@ class HeadSize:
                            name=f"{name}, measured")
         if "eye_distance_mm" in fit:
             head = replace(head, eye_distance=float(fit["eye_distance_mm"]), name=f"{name}, measured")
+        if "height_cm" in fit:
+            # The body scales with height; the head (circumference) much less, so the two are separate.
+            stature = 10.0 * float(fit["height_cm"])
+            preset = HEAD_PRESETS[name]
+            body = (stature / preset["stature"]) / (head.circumference / preset["circumference"])
+            head = replace(head, stature=stature, body_scale=body, name=f"{head.name}, {stature / 10:.0f} cm")
         return head
 
 
@@ -112,6 +122,11 @@ class HeadModel:
         # Head and neck must fit inside; the shoulders and chest below must not be cut by the card
         # (the mask rests on them, and they stop the head going further in).
         neck = CHIN_BELOW_PUPILS * size.height - NECK_BELOW_CHIN_MM
+        if size.body_scale != 1.0:                  # shoulders and chest sized by body height
+            low = self.vertices[:, 2] < neck
+            ring = self.vertices[np.abs(self.vertices[:, 2] - neck) < 10.0]
+            pivot = np.array([0.0, ring[:, 1].mean() if len(ring) else 0.0, neck])
+            self.vertices[low] = pivot + (self.vertices[low] - pivot) * size.body_scale
         upper = (self.vertices[faces][:, :, 2] > neck).all(axis=1)
         self.faces, self.torso_faces = faces[upper], faces[~upper]
         self.triangles = self.vertices[self.faces]
