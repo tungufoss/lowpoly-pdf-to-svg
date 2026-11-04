@@ -58,9 +58,22 @@ class GeneratedTabs(unittest.TestCase):
         tab = cut(root, "piece-01-01").difference(Polygon([(0, 0), (20, 0), (20, 20), (0, 20)]))
         self.assertLessEqual(tab.bounds[2], 27.501)
 
+    def test_extra_flap_folds_from_the_plain_side_and_the_tab_stays(self):
+        root = ET.fromstring(REVIEW)
+        before = cut(root, "piece-01-01")
+        stats = Retabber(TabStyle(flap_mm=15, generate=False, extra_flaps=["piece-01-02"])).apply(root, pairs())
+        self.assertEqual(stats["extra flaps"], 1)
+        self.assertTrue(cut(root, "piece-01-01").equals(before))     # a keeps its traced tab
+        flap = cut(root, "piece-01-02").difference(Polygon([(100, 0), (120, 0), (120, 20), (100, 20)]))
+        self.assertLess(flap.bounds[0], 100 - 7.6)                    # a tongue reaches past the tab
+        self.assertGreaterEqual(flap.bounds[0], 100 - 18.001)         # no further than flap_length_mm
+        self.assertGreater(flap.intersection(Polygon([(99, 0), (100, 0), (100, 20), (99, 20)])).area, 0.9 * 18)  # attached along the whole edge, not just the tongue
+
     def test_tabs_false_keeps_the_traced_tabs(self):
         self.assertIsNone(TabStyle.from_config(False))
         self.assertEqual(TabStyle.from_config({"depth_mm": 8, "keep": ["green"]}).keep, ["green"])
+        style = TabStyle.from_config({"generate": False, "extra_flaps": ["piece-24-*"]})
+        self.assertEqual((style.generate, style.extra_flaps), (False, ["piece-24-*"]))
 
 
 if __name__ == "__main__":

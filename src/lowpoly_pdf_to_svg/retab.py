@@ -9,7 +9,8 @@ finished review SVG:
   sloped ends; where two big pieces meet (`flap_area_mm2`, `flap_edge_mm`) and at stress
   points (the `stress_top` share of seams carrying the most load in fold3d.json, see stress.py,
   plus any listed under `flaps:` as piece ids or PDF numbers), the longest glue of the
-  seam gets a square flap (`flap_mm`, default 15 mm, one full tape width) centred on the edge, like a paper doll's;
+  seam gets a flap: the tab plus a paper doll's tongue in the middle of the edge, `flap_mm`
+  wide (default 15 mm, one full tape width) reaching `flap_length_mm` (default 18 mm);
 * never over a fold: the tab is laid onto the partner's face it glues to and clipped to
   that face, `margin_mm` inside its other edges, so it folds flat onto one face;
 * mirrored: a twin's tab sits on the mirror edge of its twin's tab (mirror-mismatches.csv
@@ -28,6 +29,7 @@ from __future__ import annotations
 import csv
 import math
 import re
+from fnmatch import fnmatch
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -48,7 +50,8 @@ ON_LINE_MM = 1.0      # a fold or corner this close to an edge-table line is tha
 @dataclass
 class TabStyle:
     depth_mm: float = 7.5      # how far a tab reaches from its fold: half a 15 mm tape (the PDF's are 5.6 mm)
-    flap_mm: float = 15.0      # size of a square flap, one 15 mm tape width (0: none)
+    flap_mm: float = 15.0      # width of a flap's tongue along the edge, one 15 mm tape width (0: none)
+    flap_length_mm: float = 18.0    # how far the tongue reaches from the fold (15-20 mm)
     flap_area_mm2: float = 5000.0   # a seam between two pieces this big gets one flap on its longest glue
     flap_edge_mm: float = 25.0      # ... when that glue is at least this long
     stress_top: float = 0.1         # share of seams, by load in the 3D model (fold3d.json), that get a flap
@@ -58,16 +61,22 @@ class TabStyle:
     min_mm2: float = 4.0       # a generated tab smaller than this keeps the traced one
     keep: list[str] = field(default_factory=list)   # materials already cut: their traced tabs stay
     flaps: list[str] = field(default_factory=list)  # stress points: piece ids (their seams) or PDF numbers
+    extra_flaps: list[str] = field(default_factory=list)  # pieces (ids or patterns) whose plain glue edges
+                                                          # get a flap too, beside the partner's tab
+    generate: bool = True      # false: keep the traced tabs, add only the extra flaps
 
     @classmethod
     def from_config(cls, raw: dict | None) -> "TabStyle | None":
-        """`tabs:` in the YAML; `tabs: false` (or `generate: false`) keeps the PDF tabs."""
-        if raw is False or (isinstance(raw, dict) and raw.get("generate") is False):
+        """`tabs:` in the YAML; `tabs: false` (or `generate: false`) keeps the PDF tabs, and
+        `generate: false` with `extra_flaps:` keeps them but adds the extra flaps."""
+        if raw is False or (isinstance(raw, dict) and raw.get("generate") is False and not raw.get("extra_flaps")):
             return None
         raw = raw if isinstance(raw, dict) else {}
-        lists = ("keep", "flaps")
-        style = cls(**{k: float(v) for k, v in raw.items() if k in cls.__dataclass_fields__ and k not in lists})
-        style.keep, style.flaps = ([str(m) for m in raw.get(k) or []] for k in lists)
+        lists = ("keep", "flaps", "extra_flaps")
+        style = cls(**{k: float(v) for k, v in raw.items()
+                       if k in cls.__dataclass_fields__ and k not in lists + ("generate",)})
+        style.keep, style.flaps, style.extra_flaps = ([str(m) for m in raw.get(k) or []] for k in lists)
+        style.generate = raw.get("generate", True) is not False
         return style
 
 
@@ -236,16 +245,16 @@ class Retabber:
             return None
         _, laid, laid_seg = best
         out = _outward(seg, mine.body)
-        d, cut = depth, self.style.depth_mm / math.tan(math.radians(self.style.angle_deg))
+        cut = self.style.depth_mm / math.tan(math.radians(self.style.angle_deg))
         cut = min(cut, 0.45 * seg.length)
         p0, p1 = np.array(t0), np.array(t1)
         u = (p1 - p0) / seg.length
-        if depth > self.style.depth_mm:   # a flap: a paper doll's square, centred on the edge
-            side = min(depth, seg.length)
+        d = self.style.depth_mm
+        shape = Polygon([tuple(p0), tuple(p1), tuple(p1 - u * cut + out * d), tuple(p0 + u * cut + out * d)])
+        if depth > self.style.depth_mm:   # a flap: the tab plus a paper doll's tongue, centred on the edge
+            side, reach = min(self.style.flap_mm, seg.length), self.style.flap_length_mm
             a, b = p0 + u * (seg.length - side) / 2, p1 - u * (seg.length - side) / 2
-            shape = Polygon([tuple(a), tuple(b), tuple(b + out * side), tuple(a + out * side)])
-        else:
-            shape = Polygon([tuple(p0), tuple(p1), tuple(p1 - u * cut + out * d), tuple(p0 + u * cut + out * d)])
+            shape = shape.union(Polygon([tuple(a), tuple(b), tuple(b + out * reach), tuple(a + out * reach)]))
         # Clear of the partner face's other edges: its folds (the tab would have to bend)
         # and its cuts (the tab would show).
         edges = [LineString([c, n]) for c, n in zip(laid.exterior.coords, laid.exterior.coords[1:])]
@@ -297,6 +306,9 @@ class Retabber:
         glues = [g for g in glues if not {material[p] for p in g.pieces} & set(self.style.keep)]
         for pid, shape in shapes.items():
             self._split(shape, tab_lines.get(pid, []))
+        extras = self._extras(glues, shapes) if self.style.extra_flaps else []
+        if not self.style.generate:
+            glues = []
         # Only replace tabs whose traced face was found; the rest stay as traced.
         found = {pid: s.old_tabs for pid, s in shapes.items()}
         glues = [g for g in glues if any(t.boundary.buffer(0.3).intersection(shapes[g.tab.piece].line(g.tab)).length
@@ -308,6 +320,9 @@ class Retabber:
             seams[frozenset(g.pieces)].append(g)
         flaps = self._flaps(glues, seams, length, shapes) if self.style.flap_mm else set()
         placed = defaultdict(list)
+        if not self.style.generate:   # traced tabs stay, so extra flaps keep clear of them
+            for pid, shape in shapes.items():
+                placed[pid] += shape.old_tabs
         # Flaps first, then long edges: they need the room most.
         for g in sorted(glues, key=lambda g: (id(g) not in flaps, -length[id(g)])):
             depth = self.style.flap_mm if id(g) in flaps else self.style.depth_mm
@@ -318,7 +333,14 @@ class Retabber:
             self.stats["flaps"] += g.shape is not None and id(g) in flaps
             if g.shape is not None:
                 placed[g.side].append(g.shape)
-        self._rewrite(shapes, glues, tab_lines)
+        added = []
+        for g in sorted(extras, key=lambda g: -shapes[g.edge.piece].line(g.edge).length):
+            g.shape = self._tab(g, shapes, placed, self.style.flap_mm)
+            if g.shape is not None:
+                placed[g.side].append(g.shape)
+                added.append(g)
+        self.stats["extra flaps"] = len(added)
+        self._rewrite(shapes, glues, tab_lines, added)
         self.stats["tabs generated"] = sum(g.shape is not None for g in glues)
         # Tabs the partner face cut shallower than a tape strip (0.5 mm slack): worth a look.
         self.stats["tabs shallower than the tape"] = sum(
@@ -328,9 +350,23 @@ class Retabber:
         self.stats["tabs moved to the other piece"] = sum(g.shape is not None and g.side != g.tab.piece for g in glues)
         return dict(self.stats)
 
-    def _rewrite(self, shapes: dict[str, PieceShape], glues: list[Glue], tab_lines) -> None:
+    def _extras(self, glues: list[Glue], shapes: dict[str, PieceShape]) -> list[Glue]:
+        """A flap on every plain glue edge of the `extra_flaps` pieces (and their twins), folded from
+        that piece onto its partner's face, while the partner keeps its tab: both pieces then hold
+        the seam, a paper doll's flap on one side and the tab on the other."""
+        patterns = [p if p.startswith("piece-") else f"piece-{p}" for p in self.style.extra_flaps]
+        listed = {pid for pid in shapes if any(fnmatch(pid, pattern) for pattern in patterns)}
+        listed |= {self.twin[p] for p in listed if p in self.twin}
+        return [Glue(g.number, g.tab, g.edge, g.kind, side=g.edge.piece) for g in glues if g.edge.piece in listed]
+
+    def _rewrite(self, shapes: dict[str, PieceShape], glues: list[Glue], tab_lines, extras=()) -> None:
         gone = defaultdict(list)    # old tab faces removed, per piece
         new = defaultdict(list)     # (tab polygon, fold line, kind)
+        for g in extras:            # the partner keeps its tab, the edge rows keep their sides
+            seg = _snap(shapes[g.side].line(g.edge), shapes[g.side].body)
+            base = g.shape.boundary.intersection(seg.buffer(0.01))
+            base = LineString(base.coords) if isinstance(base, LineString) and base.length > 0.5 else seg
+            new[g.side].append((g.shape, base, g.kind))
         for g in glues:
             if g.shape is None:
                 continue
@@ -340,7 +376,7 @@ class Retabber:
             gone[g.tab.piece] += old
             on = shapes[g.side]
             seg = _snap(on.line(g.tab if g.side == g.tab.piece else g.edge), on.body)
-            base = g.shape.boundary.intersection(seg.buffer(0.01))   # a square flap folds only where it is
+            base = g.shape.boundary.intersection(seg.buffer(0.01))   # a flap folds where it meets the edge
             base = LineString(base.coords) if isinstance(base, LineString) and base.length > 0.5 else seg
             new[g.side].append((g.shape, base, g.kind))
             if g.side != g.tab.piece:   # the edge rows trade sides; labels follow
@@ -373,8 +409,10 @@ class Retabber:
                 if group is None:
                     score = next(g for g in shape.element.iter(f"{{{SVG}}}g") if g.get("data-operation") == "score")
                     group = ET.SubElement(score, f"{{{SVG}}}g", {"data-fold": kind, "id": f"{pid}-{kind}"})
-                ET.SubElement(group, f"{{{SVG}}}path", {"d": _d(list(seg.coords), closed=False),
-                                                        "data-tab": "generated"})
+                attrs = {"d": _d(list(seg.coords), closed=False), "data-tab": "generated"}
+                if paths[0].get("data-operation"):   # an export SVG marks every path
+                    attrs.update({"data-operation": "score", "data-fold": kind})
+                ET.SubElement(group, f"{{{SVG}}}path", attrs)
 
 
 # ---- helpers -----------------------------------------------------------------------------------
@@ -447,3 +485,36 @@ def _outward(seg: LineString, body: Polygon) -> np.ndarray:
     n = np.array([by - ay, ax - bx]) / seg.length
     mid = np.array([(ax + bx) / 2, (ay + by) / 2])
     return n if not Point(*(mid + 0.2 * n)).within(body) else -n
+
+
+def main() -> int:
+    """Add the YAML's `tabs: extra_flaps:` to an export that is already cut, in place: labels and
+    every other piece stay as they are, so only the flapped pieces need a recut."""
+    import argparse
+
+    import yaml
+
+    from .export import ExportContract, GluePairs
+    parser = argparse.ArgumentParser(description="Add extra flaps to an existing export SVG.")
+    parser.add_argument("--config", type=Path, required=True, help="project YAML with tabs: extra_flaps:")
+    parser.add_argument("--svg", type=Path, help="export SVG (default: <folder>/<project>-export.svg)")
+    args = parser.parse_args()
+    folder, project = args.config.parent, args.config.stem
+    raw = (yaml.safe_load(args.config.read_text(encoding="utf-8")).get("tabs") or {})
+    style = TabStyle.from_config({**raw, "generate": False} if isinstance(raw, dict) else {})
+    if style is None or not style.extra_flaps:
+        parser.error("no `tabs: extra_flaps:` in the YAML")
+    target = args.svg or folder / f"{project}-export.svg"
+    tree = ET.parse(target)
+    stats = Retabber(style, folder / "mirror-mismatches.csv").apply(tree.getroot(), GluePairs.read(folder / "edge-numbers.csv"))
+    ET.indent(tree, space="")
+    tree.write(target, encoding="UTF-8", xml_declaration=True)
+    problems = ExportContract(target).errors()
+    print(f"{target}: {stats.get('extra flaps', 0)} extra flaps")
+    for problem in problems:
+        print(f"contract: {problem}")
+    return 1 if problems else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
