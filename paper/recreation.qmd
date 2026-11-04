@@ -146,7 +146,9 @@ choice for building: the line styles and edge numbering suggest Pepakura Designe
 out the unfolded parts on printable pages and numbers matching edges automatically. Colour order is not an order that is easy to build: neighbouring parts of the
 mask are often different colours, so in practice the builder moves between colours as the parts
 meet on the mask. The builder found it much easier to assemble the hair and eyebrows first and then fit them
-into the larger head pieces, while the tabs could still be reached and pressed.
+into the larger head pieces, while the tabs could still be reached and pressed. The mouth is
+similar: the teeth go in while the cheeks and upper lip are being joined, then the red tongue,
+and only then is the chin closed.
 
 ::: {.callout-note}
 To check and discuss: which tool made the template (Pepakura is a guess from the line styles and
