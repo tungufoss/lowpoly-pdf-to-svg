@@ -634,8 +634,8 @@ class Report:
                     q = self.seg.piece[other]
                     mine = self.names.get(label, label) < self.names.get(q, q)
                     if self.seg.edge_kind(edge) == "seam" and mine:
-                        shape = shape.union(self._flap(p[k], p[(k + 1) % len(p)], p.mean(axis=0), depth)
-                                            .difference(lay.outline()))
+                        flap = self._flap(p[k], p[(k + 1) % len(p)], p.mean(axis=0), depth).buffer(0)
+                        shape = shape.union(flap.difference(lay.outline().buffer(0))).buffer(0)
                     elif self.seg.edge_kind(edge) == "dart" and i != min(f for f, _ in faces):
                         q0, q1 = lay.corner(other, a), lay.corner(other, b)
                         shape = shape.union(Polygon([p[k], p[(k + 1) % len(p)], q1, q0]).buffer(0))
