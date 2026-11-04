@@ -430,6 +430,9 @@ class FitResult:
     eyes: str = "free"                 # "openings": pupils behind the model's eye openings
     eye_scale_range: list | None = None
     tip_deg: float = 0.0               # head tipped this far (+ face up) to fit
+    rule: str = "eyes"                 # "inside": smallest scale with the whole head inside the card
+    rests_on: str = ""                 # "crown" or "shoulders" for the "inside" rule
+    eye_scale: float | None = None     # scale at which the eye openings sit over the pupils
     sight: list = field(default_factory=list)
 
 
@@ -520,6 +523,40 @@ class HeadFitter:
         p, m, tip = best(scale)
         return scale, p, m, (lowest, highest), tip
 
+    def fit_inside(self, holes: tuple[np.ndarray, np.ndarray], step: float = 0.02, high: float = 1.6,
+                   depth=range(-10, 61, 5), drop=range(40, -121, -5)) -> tuple[float, np.ndarray, float, str]:
+        """Smallest scale, from the eye scale up, at which the whole head stays inside the card
+        (head room >= clearance) with the card at most TORSO_GIVE_MM into the shoulders. The mask
+        rests as low as it can: on the crown or on the shoulders, whichever it meets first
+        (Helga, 2026-11-04). Returns scale, pupil midpoint, head room and what the mask rests on."""
+        centres = np.array([h.mean(0) for h in holes])
+        mid = np.array([0.0, centres[:, 1].mean(), centres[:, 2].mean()])
+        scale = self.head.size.eye_distance / 2 / ((centres[1, 0] - centres[0, 0]) / 2)
+
+        def rest(scale):
+            top = None
+            for r in depth:                      # face this far behind the eye openings
+                for dz in drop:                  # head this far above (+) or below the openings
+                    if top is not None and dz <= top[2]:
+                        break
+                    p = mid * scale + np.array([0.0, r, dz])
+                    if self.torso_cut(scale, p, 0) > TORSO_GIVE_MM:
+                        continue
+                    m = self.margin(scale, p)
+                    if m >= self.clearance:
+                        top = (p, m, dz)
+                        break
+            return top
+        while scale <= high:
+            top = rest(scale)
+            if top is not None:
+                p, m, _ = top
+                up = p + np.array([0.0, 0.0, 5.0])
+                on = "shoulders" if self.torso_cut(scale, up, 0) > TORSO_GIVE_MM else "crown"
+                return scale, p, m, on
+            scale += step
+        raise RuntimeError(f"the head does not fit inside even at {high:.0%}")
+
     def fit(self, low: float = 0.4, high: float = 2.5, tolerance: float = 0.01) -> tuple[float, np.ndarray, float]:
         pos, m = self.best_position(high)
         if m < self.clearance:
@@ -586,7 +623,9 @@ class TemplateWriter:
         head_offset = pupils
         panels = [("front", 0, "front: as seen by someone facing the wearer"), ("side", 1, "side: the wearer looks left")]
         body = [f'<text x="12" y="14" font-size="5">Head fit: {r.head["name"]} head, mask at {s:.0%} '
-                f'(head room check: {r.tightest_mm:.0f} mm, wanted {r.clearance_mm:g})</text>',
+                + (f'(head inside, {r.tightest_mm:.0f} mm room, rests on {r.rests_on})</text>'
+                 if r.rule == "inside" else
+                 f'(head room check: {r.tightest_mm:.0f} mm, wanted {r.clearance_mm:g})</text>'),
                 f'<text x="12" y="20" font-size="3.2">Mask {r.mask_size_mm[0]:.0f} × {r.mask_size_mm[1]:.0f} × '
                 f'{r.mask_size_mm[2]:.0f} mm (wide × deep × tall). Grey: card. Blue: head (MakeHuman, CC0). Red: pupils and sight.</text>']
         extent = tri.reshape(-1, 3)
@@ -734,7 +773,11 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
         holes = mask.eye_openings() if str(fit.get("eyes", "openings")) == "openings" else None
         span = None
         tip = 0.0
-        if holes:
+        rule, rests_on, eye_scale = str(fit.get("rule", "inside")), "", None
+        if holes and rule == "inside":
+            eye_scale, *_, span, _ = fitter.fit_to_eyes(holes)
+            scale, pupils, margin, rests_on = fitter.fit_inside(holes)
+        elif holes:
             scale, pupils, margin, span, tip = fitter.fit_to_eyes(holes)
             head.tip(tip)
         else:
@@ -744,7 +787,8 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
                            pupils_mm=pupils.round(1).tolist(), tightest_mm=round(margin, 1),
                            mask_size_mm=size.round(0).tolist(), eyes="openings" if holes else "free",
                            eye_scale_range=[round(v, 3) for v in span] if span else None,
-                           tip_deg=tip)
+                           tip_deg=tip, rule=rule if holes else "free", rests_on=rests_on,
+                           eye_scale=round(eye_scale, 3) if eye_scale else None)
         finder = SightFinder(mask, scale, finder_hole)
         result.sight = [finder.look(p + pupils) for p in head.pupils]
         results.append(result)
