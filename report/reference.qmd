@@ -38,6 +38,7 @@ project: example
 source:
   pdf: example.pdf         # in data/, not committed
   page_size: letter
+  credit: "Template designer (year)"   # optional: printed on the head-fit drawings
 
 folds:                     # which printed line style is which fold
   dash_dot: mountain       # Pepakura default; swap if a template

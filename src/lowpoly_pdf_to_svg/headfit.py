@@ -33,6 +33,7 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+from xml.sax.saxutils import escape
 
 # Rounded adult means in the style of ANSUR II (2012) and a ~8 year old child; mm. They are a
 # starting point: a measured head circumference and pupil distance always win.
@@ -82,6 +83,8 @@ class HeadSize:
 
 
 HEAD_MESH = Path(__file__).resolve().parents[2] / "assets" / "head" / "makehuman-head.obj"
+HEAD_CREDIT = ("MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0), "
+               "makehumancommunity.org")
 CIRCUMFERENCE_ABOVE_PUPILS_MM = 35.0     # where a tape goes round the head, above the brows
 NECK_BELOW_CHIN_MM = 50.0                # how much neck is kept below the chin
 TORSO_GIVE_MM = 5.0                      # the card may press this far into clothes and skin
@@ -557,11 +560,21 @@ class SightFinder:
 class TemplateWriter:
     """The two A4 SVG pages."""
 
-    def __init__(self, mask: FoldedMask, data: dict, head: HeadModel, result: FitResult):
+    def __init__(self, mask: FoldedMask, data: dict, head: HeadModel, result: FitResult, credit: str | None = None):
         self.mask, self.data, self.head, self.result = mask, data, head, result
+        self.credit = credit
+
+    def credits(self) -> list[str]:
+        """Who made what is drawn: the mask's template (YAML source.credit) and the head and torso."""
+        return ([f"Mask: {self.credit}."] if self.credit else []) + ["Head and torso: " + HEAD_CREDIT + "."]
 
     def _svg(self, body: list[str]) -> str:
         w, h = A4_MM
+        lines = self.credits()
+        top = h - 4 - 3.6 * len(lines)
+        body = body + [f'<rect x="0" y="{top:g}" width="{w}" height="{h - top:g}" fill="white" opacity="0.85"/>'] + [
+            f'<text x="12" y="{top + 3.6 * (k + 1):.1f}" font-size="2.8" fill="#555">{escape(line)}</text>'
+            for k, line in enumerate(lines)]
         return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}" '
                 f'font-family="sans-serif">\n<rect width="{w}" height="{h}" fill="white"/>\n'
                 + "\n".join(body) + "\n</svg>\n")
@@ -737,7 +750,7 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
         results.append(result)
         if k == 0:
             (folder / "head-fit.json").write_text(json.dumps(asdict(result), indent=2) + "\n", encoding="utf-8")
-            writer = TemplateWriter(mask, data, head, result)
+            writer = TemplateWriter(mask, data, head, result, (raw.get("source") or {}).get("credit"))
             (folder / "head-fit-views.svg").write_text(writer.views(), encoding="utf-8")
             (folder / "head-fit-eyes.svg").write_text(writer.eyes(), encoding="utf-8")
             (folder / "head-fit-mesh.json").write_text(json.dumps(head_mesh(mask, head, result)), encoding="utf-8")
@@ -753,7 +766,7 @@ def head_mesh(mask: FoldedMask, head: HeadModel, result: FitResult) -> dict:
     used = np.unique(faces)
     index = np.full(len(vertices), -1)
     index[used] = np.arange(len(used))
-    return {"source": "MakeHuman base mesh (CC0), assets/head/makehuman-head.obj",
+    return {"source": "MakeHuman base mesh (CC0), assets/head/makehuman-head.obj", "credit": HEAD_CREDIT,
             "head": result.head["name"], "scale": result.scale,
             "vertices": np.round(vertices[used], 1).tolist(), "faces": index[faces].tolist(),
             "torso_from": int(len(head.faces))}
