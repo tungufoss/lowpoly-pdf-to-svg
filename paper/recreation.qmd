@@ -118,7 +118,14 @@ openings, edges that border the opening, and so meet no other piece, still carry
 tab; the builder looks for a matching edge that does not exist, and cuts the tabs off once it is
 clear none is needed. In the edge table of the Bowser template 6 numbers stay unpaired after
 correction *(check)*. In the recreation, every edge is either glued in the folded mesh or lies on
-an opening, so a number or tab on an open edge is flagged for review instead of being printed.
+an opening; unpaired numbers are listed on the check page for review, and the export gives short
+labels only to glued pairs.
+
+::: {.callout-note}
+Check before submission: generated tabs are made only for glue pairs, but a traced PDF tab on an
+open edge is kept when tabs are not regenerated (as for the already-cut Bowser), so it would
+still be cut. Dropping tabs on rim edges of the folded mesh would close this.
+:::
 
 **Many small pieces and short seams.** The template has 180 pieces on 21 sheets. Low-poly
 detail such as the nose, teeth, eyebrows and hair is split into small pieces with short edges:
