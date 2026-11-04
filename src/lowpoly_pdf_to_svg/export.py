@@ -36,6 +36,7 @@ from pathlib import Path
 
 import yaml
 
+from .assembly import AssemblyOrder
 from .retab import Retabber, TabStyle
 
 SVG, INKSCAPE = "http://www.w3.org/2000/svg", "http://www.inkscape.org/namespaces/inkscape"
@@ -255,12 +256,13 @@ class ExportWriter:
 
     def __init__(self, pairs: GluePairs, materials: Materials, alphabet: LabelAlphabet = LabelAlphabet(),
                  twins: dict[str, str] | None = None, label_size: float = 5.0, number_size: float = 10.0,
-                 piece_positions: dict[str, float] | None = None):
+                 piece_positions: dict[str, float] | None = None, build_order: list[str] | None = None):
         self.pairs, self.materials, self.alphabet, self.twins = pairs, materials, alphabet, twins or {}
         # One size for every edge label (Helga: same font size); the pen font's cap height is 0.75 of it.
         self.sizes = (label_size,)
         self.number_size = number_size
         self.piece_positions = piece_positions or {}
+        self.build_order = build_order or []
 
     def export(self, source: Path, target: Path, retab: "Retabber | None" = None) -> dict[str, int]:
         tree = ET.parse(source)
@@ -279,7 +281,7 @@ class ExportWriter:
 
         texts, used = [], set()
         pieces = [g for g in root.iter(f"{{{SVG}}}g") if g.get("data-material") is not None]
-        numbers = PieceNumbers([g.get("id") for g in pieces], self.twins, self.piece_positions)
+        numbers = PieceNumbers([g.get("id") for g in pieces], self.twins, self.piece_positions, self.build_order)
         for piece in pieces:
             match = self.PIECE_ID.match(piece.get("id", ""))
             page = int(match.group(1)) if match else 0
@@ -533,14 +535,17 @@ class PieceNumbers:
     shares its twin's number. The copy with the smaller x (the wearer's right; fold3d poses the face
     towards +z with y up) gets a circle and the other a square, using the
     folded model's x positions when available (source order is the fallback before folding).
-    An unpaired piece keeps its sequence slot with an A prefix and a triangle."""
+    An unpaired piece (on the centre line) keeps its sequence slot with an A prefix and a triangle.
+    `order` (the build order from assembly.py) numbers the pieces in glue order instead of page
+    order: glue 1 first, then 2, ...; pieces it does not list follow in page order."""
 
     def __init__(self, pieces: list[str], twins: dict[str, str] | None = None,
-                 positions: dict[str, float] | None = None):
+                 positions: dict[str, float] | None = None, order: list[str] | None = None):
         twins = twins or {}
         positions = positions or {}
         self.numbers, self.frames, count = {}, {}, 0
-        for piece in sorted(pieces):
+        rank = {piece: i for i, piece in enumerate(order or [])}
+        for piece in sorted(pieces, key=lambda p: (rank.get(p, len(rank)), p)):
             if piece in self.numbers:
                 continue
             count += 1
@@ -750,12 +755,19 @@ def main() -> int:
     pairs = GluePairs.read(edges)
     target = folder / f"{project}-export.svg"
     twins = PieceNumbers.read_twins(folder / "mirror-mismatches.csv")
-    style = TabStyle.from_config(yaml.safe_load(args.config.read_text(encoding="utf-8")).get("tabs"))
+    raw = yaml.safe_load(args.config.read_text(encoding="utf-8"))
+    style = TabStyle.from_config(raw.get("tabs"))
+    # Piece numbers in build order (assembly.py) once the model is folded, unless the YAML keeps page order.
+    numbering = str((raw.get("export") or {}).get("numbers", "build"))
+    if numbering not in ("build", "pages"):
+        parser.error(f"export: numbers: {numbering!r} must be build or pages")
+    fold3d = folder / "fold3d.json"
+    order = AssemblyOrder(fold3d).order() if numbering == "build" and fold3d.is_file() else []
     retab = (Retabber(style, folder / "mirror-mismatches.csv", folder / "fold3d.json")
              if style and not args.traced_tabs else None)
     counts = ExportWriter(pairs, Materials(args.config), twins=twins, label_size=args.label_size,
                           number_size=args.number_size,
-                          piece_positions=PieceNumbers.read_positions(folder / 'fold3d.json')).export(source, target, retab)
+                          piece_positions=PieceNumbers.read_positions(fold3d), build_order=order).export(source, target, retab)
     pairs.write(folder / f"{project}-labels.csv")
     problems = ExportContract(target).errors()
     print(f"{target}: {counts['pieces']} pieces filled, {counts['labels']} numbers -> "
