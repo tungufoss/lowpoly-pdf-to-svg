@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 
 from . import segment
+from .palette import yaml_colours
 from .segment import Mesh, Report, Segmentation, Segmenter, _names
 
 LETTER_MM = (215.9, 279.4)
@@ -126,6 +127,7 @@ def fitness(seg: Segmentation, sheet_cost: float) -> tuple[float, float]:
 
 def _init(fold3d: str, chosen: list[str], sheet_cost: float):
     data = json.loads(Path(fold3d).read_text(encoding="utf-8"))
+    yaml_colours(data, Path(fold3d))   # faces recoloured in the viewer split their piece
     mesh = Mesh(data)
     mesh.symmetrize()
     region = {i for i, f in enumerate(mesh.faces) if f.piece in set(chosen)}
@@ -182,6 +184,7 @@ def main() -> int:
     ap.add_argument("--out", type=Path)
     args = ap.parse_args()
     data = json.loads(args.fold3d.read_text(encoding="utf-8"))
+    yaml_colours(data, args.fold3d)
     chosen = {p for p in args.pieces.split(",") if p}
     chosen |= {p for p, v in data["pieces"].items() if args.material and v["material"] == args.material}
     chosen |= {data["pieces"][p].get("twin") for p in chosen} - {None, ""}

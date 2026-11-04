@@ -29,6 +29,7 @@ from pathlib import Path
 import numpy as np
 
 from . import segment
+from .palette import yaml_colours
 from .segment import (HINGE_MM, STRAIGHT_DEG, TAPE_MM, TINY_MM2, Layout, Mesh, Report, Segmentation,
                       Segmenter, _names)
 
@@ -193,6 +194,7 @@ def main() -> int:
     if args.max_piece:
         segment.MAX_PIECE_MM = tuple(float(v) for v in args.max_piece.lower().split("x"))
     data = json.loads(args.fold3d.read_text(encoding="utf-8"))
+    yaml_colours(data, args.fold3d)   # faces recoloured in the viewer split their piece
     mesh = Mesh(data)
     mesh.symmetrize()
     chosen = {p for p in args.pieces.split(",") if p}

@@ -31,6 +31,8 @@ class Material:
     pages: tuple[int, ...]
     pieces: tuple[str, ...] = ()   # pieces cut from this cardstock although their page is printed for another
     color: str = ""                # fill colour (#rrggbb); empty: the palette's, else DEFAULT_COLORS
+    faces: tuple[str, ...] = ()    # single faces (piece-04-06/5) of this colour inside a piece of another:
+                                   # the piece is split along the colour boundary when it is re-cut (make segment)
 
 
 class Palette:
@@ -73,7 +75,8 @@ class Project:
                 Material(str(m["id"]), palette.name(str(m["id"]), str(m.get("name") or "")),
                          tuple(int(p) for p in m.get("pages") or ()),
                          tuple(str(p) for p in m.get("pieces") or ()),
-                         palette.color(str(m["id"]), str(m.get("color") or "")))
+                         palette.color(str(m["id"]), str(m.get("color") or "")),
+                         tuple(str(f) for f in m.get("faces") or ()))
                 for m in raw["materials"]
             )
             used = {m.id for m in materials}
@@ -107,6 +110,16 @@ class Project:
                 if piece in seen:
                     raise ValueError(f"{piece} is assigned to both {seen[piece].id} and {material.id}")
                 seen[piece] = material
+        return seen
+
+    def face_materials(self) -> dict[str, Material]:
+        """Single faces given another colour than their piece's, rejecting faces listed twice."""
+        seen: dict[str, Material] = {}
+        for material in self.materials:
+            for face in material.faces:
+                if face in seen:
+                    raise ValueError(f"{face} is assigned to both {seen[face].id} and {material.id}")
+                seen[face] = material
         return seen
 
     def pages(self) -> list[tuple[int, Material]]:

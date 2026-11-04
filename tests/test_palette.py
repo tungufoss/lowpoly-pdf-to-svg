@@ -47,8 +47,9 @@ class PaletteTests(unittest.TestCase):
 
     def recolour(self, changes):
         recolour = Recolour(self.project)
-        text = YamlMaterials(YAML).write(recolour.apply(changes), {m.id: m for m in self.project.palette},
-                                         {m.id: list(m.pieces) for m in self.project.materials})
+        before = {m.id: {"pieces": list(m.pieces), "faces": list(m.faces)} for m in self.project.materials}
+        text = YamlMaterials(self.path.read_text(encoding="utf-8")).write(
+            recolour.apply(changes), {m.id: m for m in self.project.palette}, before)
         self.path.write_text(text, encoding="utf-8")
         return text, Recolour(Project.load(self.path))
 
@@ -74,6 +75,30 @@ class PaletteTests(unittest.TestCase):
     def test_unchanged_list_keeps_its_lines(self):
         text, _ = self.recolour({"piece-02-01": "blue"})
         self.assertIn("    pieces: [piece-01-03]   # rings\n", text)
+
+    def test_single_faces_split_a_piece(self):
+        text, after = self.recolour({"piece-01-01/2": "blue", "piece-01-01/3": "blue", "piece-01-03/1": "brown"})
+        self.assertEqual(after.material("piece-01-01/2"), "blue")
+        self.assertEqual(after.material("piece-01-01/1"), "red")       # the rest stays the piece's
+        self.assertEqual(after.material("piece-01-01"), "red")
+        self.assertNotIn("piece-01-03/1", text)                        # already the piece's colour
+        self.assertIn("    faces: [piece-01-01/2, piece-01-01/3]\n", text)
+        self.assertEqual(after.split_pieces(after.apply({})), ["piece-01-01"])
+        self.project = Project.load(self.path)
+        # A whole-piece row clears that piece's face rows.
+        text, after = self.recolour({"piece-01-01": "gold"})
+        self.assertEqual(after.material("piece-01-01/2"), "gold")
+        self.assertNotIn("faces:", text)
+
+    def test_yaml_colours_for_the_recut(self):
+        from src.lowpoly_pdf_to_svg.palette import yaml_colours
+        self.recolour({"piece-01-01/2": "blue", "piece-02-01": "brown"})
+        data = {"pieces": {"piece-01-01": {"material": "red"}, "piece-02-01": {"material": "gold"}},
+                "faces": [{"id": "piece-01-01/1", "piece": "piece-01-01"}, {"id": "piece-01-01/2", "piece": "piece-01-01"},
+                          {"id": "piece-02-01/1", "piece": "piece-02-01"}]}
+        self.assertEqual(yaml_colours(data, self.path.with_name("fold3d.json")), 1)
+        self.assertEqual(data["face_material"], {"piece-01-01/2": "blue"})
+        self.assertEqual(data["pieces"]["piece-02-01"]["material"], "brown")
 
     def test_unknown_colour_is_refused(self):
         with self.assertRaises(ValueError):
