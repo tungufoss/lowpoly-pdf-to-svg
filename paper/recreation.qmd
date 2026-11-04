@@ -137,10 +137,13 @@ cardstock for the few pieces that changed, and most of that sheet becomes unnece
 
 **No 3D reference.** The template shows a picture of the finished mask and the flat pieces, but
 not where a given piece sits, which side faces out, or what to glue first. Builders work this
-out from the numbers.
+out from the numbers. Pieces that join usually sit on the same page or a nearby one, which
+helps, but nothing says which page to start with.
 
-**A fixed order.** Page order is the designer's layout order, not an order that is easy to
-build. The builder found it much easier to assemble the hair and eyebrows first and then fit them
+**A fixed order.** Pages come in colour order, all red pages, then green, then yellow, because
+each page is one colour. That is not an order that is easy to build: neighbouring parts of the
+mask are often different colours, so in practice the builder moves between colours as the parts
+meet on the mask. The builder found it much easier to assemble the hair and eyebrows first and then fit them
 into the larger head pieces, while the tabs could still be reached and pressed.
 
 # Method: recreating the template digitally {#sec-method}
