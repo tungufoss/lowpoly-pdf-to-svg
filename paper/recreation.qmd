@@ -131,8 +131,9 @@ narrower and longer; pieces near the edge of a Letter page do not fit, and the p
 simply be scaled without changing the size of the mask.
 
 **A fixed colour per page.** Each page is one colour. Changing the colour of a few parts (here:
-gold horns, rust hair and eyebrows, a red mouth, brown horn rings) moves pieces between colours,
-so the designed pages cannot be cut as they are and have to be rearranged by hand.
+gold horns, rust hair and eyebrows, a red mouth, brown horn rings) moves pieces between colours.
+With the printed template the only option is to cut the whole page again on the other colour of
+cardstock for the few pieces that changed, and most of that sheet becomes unnecessary offcut.
 
 **No 3D reference.** The template shows a picture of the finished mask and the flat pieces, but
 not where a given piece sits, which side faces out, or what to glue first. Builders work this
