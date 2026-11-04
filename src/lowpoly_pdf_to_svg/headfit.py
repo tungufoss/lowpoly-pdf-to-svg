@@ -564,14 +564,17 @@ class TemplateWriter:
         self.mask, self.data, self.head, self.result = mask, data, head, result
         self.credit = credit
 
-    def credits(self) -> str:
+    def credits(self) -> list[str]:
         """Who made what is drawn: the mask's template (YAML source.credit) and the head and torso."""
-        mask = f"Mask: {self.credit}. " if self.credit else ""
-        return mask + "Head and torso: " + HEAD_CREDIT + "."
+        return ([f"Mask: {self.credit}."] if self.credit else []) + ["Head and torso: " + HEAD_CREDIT + "."]
 
     def _svg(self, body: list[str]) -> str:
         w, h = A4_MM
-        body = body + [f'<text x="12" y="{h - 5:g}" font-size="2.8" fill="#555">{escape(self.credits())}</text>']
+        lines = self.credits()
+        top = h - 4 - 3.6 * len(lines)
+        body = body + [f'<rect x="0" y="{top:g}" width="{w}" height="{h - top:g}" fill="white" opacity="0.85"/>'] + [
+            f'<text x="12" y="{top + 3.6 * (k + 1):.1f}" font-size="2.8" fill="#555">{escape(line)}</text>'
+            for k, line in enumerate(lines)]
         return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}mm" height="{h}mm" viewBox="0 0 {w} {h}" '
                 f'font-family="sans-serif">\n<rect width="{w}" height="{h}" fill="white"/>\n'
                 + "\n".join(body) + "\n</svg>\n")
