@@ -15,6 +15,11 @@
 #   make assembly   build order from the folded model (fold3d.json): far from the neck first, twins
 #                   together; data/<project>/assembly.json (the viewer's Assemble player) and assembly.csv.
 #                   The export numbers the pieces in this order unless the YAML says export: numbers: pages
+#   make palette   data/<project>/palette.json for the viewer's Recolour: every material and the
+#                   spare YAML `palette:` colours, so the viewer colours pieces as the YAML says now
+#   make recolour   write the viewer's data/<project>/recolour.csv (piece,material; RECOLOUR=path)
+#                   into the YAML `materials:` pieces lists, then refresh palette.json; follow with
+#                   make export and a re-nest (papercraft: make nest)
 #   make export-check  rebuild the synthetic fixture in fixtures/export/ and check it against the
 #                   export contract (report/export-contract.qmd)
 #   make segment PIECES=piece-11-04,piece-11-05  (or MATERIAL=green) re-cut those pieces and their
@@ -36,7 +41,7 @@ DPI     ?= 180
 SOURCES := $(filter-out %/export.py %/fold3d.py,$(wildcard src/lowpoly_pdf_to_svg/*.py))
 CONVERT  = $(PYTHON) -m src.lowpoly_pdf_to_svg --config $(CONFIG) --output $(OUT) --dpi $(DPI)
 
-.PHONY: all page redo piece number fix export export-check assembly segment partition example install clean
+.PHONY: all page redo piece number fix export export-check palette recolour assembly segment partition example install clean
 
 all: $(OUT)/$(PROJECT).svg
 
@@ -69,6 +74,14 @@ export: $(OUT)/$(PROJECT)-export.svg
 
 $(OUT)/$(PROJECT)-export.svg: $(OUT)/$(PROJECT).svg $(CONFIG) src/lowpoly_pdf_to_svg/export.py src/lowpoly_pdf_to_svg/retab.py src/lowpoly_pdf_to_svg/assembly.py
 	$(PYTHON) -m src.lowpoly_pdf_to_svg.export --config $(CONFIG) --output $(OUT)
+
+palette:
+	$(PYTHON) -m src.lowpoly_pdf_to_svg.palette --config $(CONFIG)
+
+RECOLOUR ?= $(OUT)/recolour.csv
+recolour:
+	@test -f $(RECOLOUR) || { echo "save recolour.csv from the viewer's Recolour panel into $(OUT)/ first"; exit 2; }
+	$(PYTHON) -m src.lowpoly_pdf_to_svg.palette --config $(CONFIG) --apply $(RECOLOUR)
 
 assembly:
 	@test -f $(OUT)/fold3d.json || { echo "run make -f fold3d.mk first"; exit 2; }
