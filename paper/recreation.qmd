@@ -141,10 +141,18 @@ out from the numbers. Pieces that join usually sit on the same page or a nearby 
 helps, but nothing says which page to start with.
 
 **A fixed order.** Pages come in colour order, all red pages, then green, then yellow, because
-each page is one colour. That is not an order that is easy to build: neighbouring parts of the
+each page is one colour. This looks like the default of the unfolding software rather than a
+choice for building: the line styles and edge numbering suggest Pepakura Designer, which lays
+out the unfolded parts on printable pages and numbers matching edges automatically. Colour order is not an order that is easy to build: neighbouring parts of the
 mask are often different colours, so in practice the builder moves between colours as the parts
 meet on the mask. The builder found it much easier to assemble the hair and eyebrows first and then fit them
 into the larger head pieces, while the tabs could still be reached and pressed.
+
+::: {.callout-note}
+To check and discuss: which tool made the template (Pepakura is a guess from the line styles and
+three-digit edge numbers), and what its page-layout logic is (grouping by face colour, packing
+within a colour, how the designer can override it). Cite the Pepakura documentation.
+:::
 
 # Method: recreating the template digitally {#sec-method}
 
