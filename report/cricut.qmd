@@ -64,7 +64,7 @@ still held when the blade goes round the pieces. Weed the pieces off the mat slo
 - Every glue edge carries a short label (usually two characters, one letter where a piece joins itself,
   longer on very large models); the other edge with the same label is its partner, on another piece or on
   the same one. Glue tab to face, one pair at a time.
-- Mirror twins share a piece number: a circle for the copy on the wearer's right, a square for the wearer's left. A piece without a twin has an `A` number in a triangle.
+- Mirror twins share a piece number: a circle for the copy on the wearer's right, a square for the wearer's left. Looking at the inside, where the numbers are, circles are on the right; seen from outside they are on the left. A piece without a twin has an `A` number in a triangle.
 - All numbers and labels end up on the inside of the mask (the cardstock lies good side down on the mat), so the outside stays clean.
 - Wide flaps sit on seams that carry load (big pieces, horns, snout); glue them flat on the inside.
 - `<m>-labels.csv` lists every label with its PDF number and pieces, if you need to check against the PDF
