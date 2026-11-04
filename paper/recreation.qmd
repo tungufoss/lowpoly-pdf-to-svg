@@ -296,7 +296,7 @@ manual rearrangement of pages. A palette in the YAML and recolouring in the view
 The new labels replace the template's three-digit edge numbers with short two-character labels
 in a 5 mm font, and each piece gets a piece number up to 10 mm high in its middle. Twins share
 the number; the frame tells them apart: a circle on the copy on the wearer's right, a square on
-the wearer's left (looking into the mask, circles are on the right; from outside, on the left), and a triangle (with an A prefix) for a piece that crosses the middle and so
+the wearer's left (looking into the mask, circles are on the right; from outside, on the left), and a triangle for a piece that crosses the middle and so
 exists once.
 
 All marks are on the inside of the mask. The builder lays the cardstock good side down on the
