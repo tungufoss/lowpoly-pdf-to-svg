@@ -226,9 +226,14 @@ double-sided tape readily available, so the defaults follow it: tabs are 7.5 mm 
 whole glue edge, so that a strip of tape cut once lengthwise covers two tabs, and 15 mm wide
 tongues, one full tape width, sit on seams that carry load or are short. On a mask this large,
 with this many parts, the wider glue area is what keeps the seams closed. A tab never crosses a
-fold of the face it glues onto; it is clipped there. Twins carry mirrored tabs, except where a
-piece glues to its own twin, where tabs alternate sides. Which side of a seam gets the tab is a
-free choice, and the nesting uses it.
+fold of the face it glues onto; it is clipped there. Twins carry mirrored tabs, except where a piece glues to its own twin, where tabs alternate
+sides along the seam. The template does this on most centre seams but not all of them, and in
+the build it matters: alternating tabs hold the two halves in line while the glue sets, whereas
+tabs all on one side make it easy to slide past the score line, so the pieces end up misaligned
+and have to be pulled apart and glued again, and the glue weakens each time. The generator
+alternates them on every such seam. One exception is the teeth: they are narrow, so their tabs
+are placed on the tooth, pointing out, where they are easiest to reach. Elsewhere, which side of
+a seam gets the tab is a free choice, and the nesting uses it.
 
 ## Nesting on the builder's paper, with tab side as a variable
 
