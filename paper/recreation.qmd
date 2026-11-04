@@ -73,7 +73,7 @@ choices, made for hand cutting, stay in place.
 This paper is a case study of that gap. One of us downloaded a designer's template for a low-poly
 mask of Bowser, the villain of Nintendo's *Super Mario* games, and built it with a Cricut. The
 template is by Papercraft Cat (© 2017 Remy Del Toro) and is free for personal use: a 24-page US
-Letter PDF with 21 sheets of pieces in seven cardstock colours. Bowser is a character and
+Letter PDF with 21 sheets of pieces. Bowser is a character and
 trademark of Nintendo; the template is a fan design, and this paper uses it only as a case
 study. Doing so exposed a list of practical problems that have
 little to do with the quality of the design and a lot to do with the template being a fixed,
