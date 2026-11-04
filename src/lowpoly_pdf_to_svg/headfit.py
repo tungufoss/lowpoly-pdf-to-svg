@@ -491,7 +491,7 @@ class HeadFitter:
         def best(scale):
             """Best pose: most head room among poses whose card stays out of the chest."""
             top = None
-            for tip in range(-30, 31, 5):
+            for tip in (0,):                                     # upright: Helga, 2026-11-04
                 self.samples = upright @ _pitch(tip).T
                 for relief in (10.0, 15.0, 20.0):                # face close behind the eye openings
                     for dz in (-8.0, 0.0, 8.0):                  # a little up or down in the opening
@@ -503,15 +503,18 @@ class HeadFitter:
                             continue
                         top = (p, m, tip)
             self.samples = upright
-            return top or (mid * scale, -1e3, 0)
-        # The chest stops the head: scan the scales the eyes allow and keep the one with the most
-        # head room among poses that rest on the shoulders without cutting into them.
-        top = None
-        for scale in np.arange(lowest, highest + 1e-9, 0.02):
-            p, m, tip = best(scale)
-            if top is None or m > top[2] + 0.5:
-                top = (scale, p, m, tip)
-        scale, p, m, tip = top
+            if top is None:                                      # every pose cuts the chest: least cut
+                self.samples = upright
+                cuts = [(self.torso_cut(scale, mid * scale + np.array([0.0, r, dz]), 0), r, dz)
+                        for r in (10.0, 15.0, 20.0) for dz in (-8.0, 0.0, 8.0)]
+                _, r, dz = min(cuts)
+                p = mid * scale + np.array([0.0, r, dz])
+                top = (p, self.margin(scale, p), 0)
+            return top
+        # The eye openings sit centred over the pupils; the head stands upright and the mask rests on
+        # the shoulders. The head room inside is reported as a check: the fold is rough inside.
+        scale = ipd / half_gap
+        p, m, tip = best(scale)
         return scale, p, m, (lowest, highest), tip
 
     def fit(self, low: float = 0.4, high: float = 2.5, tolerance: float = 0.01) -> tuple[float, np.ndarray, float]:
@@ -737,7 +740,23 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
             writer = TemplateWriter(mask, data, head, result)
             (folder / "head-fit-views.svg").write_text(writer.views(), encoding="utf-8")
             (folder / "head-fit-eyes.svg").write_text(writer.eyes(), encoding="utf-8")
+            (folder / "head-fit-mesh.json").write_text(json.dumps(head_mesh(mask, head, result)), encoding="utf-8")
     return results
+
+
+def head_mesh(mask: FoldedMask, head: HeadModel, result: FitResult) -> dict:
+    """The fitted head and shoulders in fold3d.json's axes and size (the mask unscaled, so the head
+    shrinks by 1/scale), for the 3D viewer."""
+    pupils = np.array(result.pupils_mm)
+    vertices = ((head.vertices + pupils) / result.scale) @ mask.frame
+    faces = np.vstack([head.faces, head.torso_faces])
+    used = np.unique(faces)
+    index = np.full(len(vertices), -1)
+    index[used] = np.arange(len(used))
+    return {"source": "MakeHuman base mesh (CC0), assets/head/makehuman-head.obj",
+            "head": result.head["name"], "scale": result.scale,
+            "vertices": np.round(vertices[used], 1).tolist(), "faces": index[faces].tolist(),
+            "torso_from": int(len(head.faces))}
 
 
 def main() -> None:
