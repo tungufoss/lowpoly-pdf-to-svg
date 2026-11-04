@@ -25,8 +25,9 @@ CLUSTER_MM = 1.0   # 3D corners this close are one corner of the folded model
 
 
 class SeamLoad:
-    def __init__(self, fold3d: Path):
-        data = json.loads(fold3d.read_text(encoding="utf-8"))
+    def __init__(self, fold3d: Path | dict):
+        """`fold3d` is fold3d.json, or the same structure already loaded (segment.py)."""
+        data = fold3d if isinstance(fold3d, dict) else json.loads(fold3d.read_text(encoding="utf-8"))
         self.points = np.array(data["vertices"], float)
         self.faces, self.glues = data["faces"], data["glues"]
         self.corner = self._clusters()
