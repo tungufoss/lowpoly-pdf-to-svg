@@ -53,13 +53,15 @@
   #orbit-pad button { border: 1px solid var(--line); border-radius: 5px; background: color-mix(in srgb, var(--panel) 88%, transparent);
     color: var(--ink); font: 18px/1 system-ui, sans-serif; cursor: pointer; }
   #orbit-pad button:hover { background: var(--panel); }
-  #pair-bar { grid-row: 2; display: flex; flex-wrap: wrap;
+  #pair-bar, #build-bar { grid-row: 2; display: flex; flex-wrap: wrap;
     align-items: center; gap: 6px 8px; padding: 6px 16px; border-bottom: 1px solid var(--line);
     background: color-mix(in srgb, var(--panel) 92%, transparent); color: var(--ink); }
-  #pair-bar[hidden] { display: none; }
-  #pair-bar button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
+  #pair-bar[hidden], #build-bar[hidden] { display: none; }
+  #build-bar button { min-width: 2.6em; }
+  #pair-bar button, #build-bar button { font: inherit; padding: 3px 8px; border: 1px solid var(--line); border-radius: 5px;
     background: var(--panel); color: var(--ink); cursor: pointer; }
-  #pair-label { flex: 1 1 200px; }
+  #pair-label, #build-label { flex: 1 1 200px; }
+  #build-label b { font-variant-numeric: tabular-nums; }
   #face-menu { position: fixed; z-index: 10; min-width: 180px; padding: 5px; border: 1px solid var(--line);
     border-radius: 7px; background: var(--panel); box-shadow: 0 4px 16px #0004; }
   #face-menu[hidden] { display: none; }
@@ -114,7 +116,10 @@
     header .stats#stats { flex-basis: 100%; font-size: 12px; }
     header button, header select, header input[type="search"] { min-height: 32px; }
     #controls-toggle { display: inline-block; margin-left: auto; }
-    header:not(.expanded) > :not(h1, #stats, #fit-view, #find, #controls-toggle) { display: none; }
+    header:not(.expanded) > :not(h1, #stats, #fit-view, #build-open, #find, #controls-toggle) { display: none; }
+    #build-bar { padding: 6px 12px; gap: 6px; }
+    #build-bar button { min-height: 40px; min-width: 44px; font-size: 16px; }
+    #build-label { flex-basis: 100%; order: -1; font-size: 13px; }
     header label, #inspection-legend { flex-basis: 100%; }
     #inspection-list { max-width: 100% !important; width: 100%; }
     /* 16px keeps iOS Safari from zooming the page when the box takes focus. */
@@ -144,6 +149,7 @@
   <h1 id="title">Folded model</h1>
   <span class="stats" id="stats"></span>
   <button id="fit-view" type="button">Overview</button>
+  <button id="build-open" type="button" hidden title="Build the model piece by piece in glue order: far from the neck first, twins together">Assemble</button>
   <form id="find" role="search"><input id="find-text" type="search" size="14" placeholder="find 477, 2T, or 11-02"
     aria-label="Find a glue number, Cricut label, or piece" title="A Cricut label or glue number finds its paired pieces; a piece id shows that piece and its twin"></form>
   <button id="controls-toggle" type="button" aria-expanded="false">Controls</button>
@@ -173,6 +179,15 @@
   <button type="button" data-step="1" title="Next pair (N)">Next ▶</button>
   <button type="button" id="pair-edit">Edit pair…</button>
   <button type="button" id="pair-close" aria-label="Stop stepping through pairs">✕</button>
+</div>
+<div id="build-bar" role="toolbar" aria-label="Assembly steps" hidden>
+  <button type="button" data-build="first" aria-label="First step" title="First step (Home)">⏮</button>
+  <button type="button" data-build="-1" aria-label="Previous piece" title="Previous piece (B)">◀</button>
+  <button type="button" id="build-play" aria-label="Play" title="Play: add the pieces one by one (space)">▶ Play</button>
+  <button type="button" data-build="1" aria-label="Next piece" title="Next piece (N)">▶</button>
+  <button type="button" data-build="last" aria-label="Last step" title="Last step (End)">⏭</button>
+  <span id="build-label" aria-live="polite"></span>
+  <button type="button" id="build-close" aria-label="Stop assembling">✕</button>
 </div>
 <main>
   <div class="pane" id="three">
@@ -262,6 +277,7 @@ const sameOrigin = (url, name) => {
   showError(`${name} must be a file on this site`);
   throw new Error(`${name} must be on this site`);
 };
+const PLAY_MS = 1200;   // assembly player: one step per 1.2 s
 const jsonUrl = sameOrigin(params.get("json") || "../data/example/fold3d.json", "json");
 const svgUrl = sameOrigin(params.get("svg") || "../data/example/example.svg", "svg");
 const modelName = params.get("model") || jsonUrl.match(/\/data\/([^/]+)\//)?.[1] || "";
@@ -825,7 +841,10 @@ class FoldedView {
       context.font = "bold 30px sans-serif"; context.textAlign = "center"; context.textBaseline = "middle";
       if (frame) {
         context.lineWidth = 7; context.strokeStyle = "#fff";
-        const path = () => { context.beginPath(); frame === "circle" ? context.arc(32, 32, 26, 0, 2 * Math.PI) : context.rect(7, 7, 50, 50); };
+        const path = () => { context.beginPath();
+          if (frame === "circle") context.arc(32, 32, 26, 0, 2 * Math.PI);
+          else if (frame === "triangle") { context.moveTo(32, 3); context.lineTo(61, 56); context.lineTo(3, 56); context.closePath(); }
+          else context.rect(7, 7, 50, 50); };
         path(); context.stroke(); context.lineWidth = 3; context.strokeStyle = "#111"; path(); context.stroke();
       }
       context.lineWidth = 5; context.strokeStyle = "#fff"; context.strokeText(text, size / 2, size / 2);
@@ -966,7 +985,7 @@ class FoldedView {
       if (!matches.has(other)) matches.set(other, new Set());
       matches.get(other).add(String(glue.number));
     }
-    const visible = label => !!selected && (label.piece === selected ||
+    const visible = label => !!selected && (!this.built || this.built.has(label.piece)) && (label.piece === selected ||
       matches.get(label.piece)?.has(String(label.pdfNumber)));
     for (const [mode, mesh] of Object.entries(this.labelMeshes || {})) if (mesh) {
       mesh.geometry.clearGroups();
@@ -983,7 +1002,8 @@ class FoldedView {
         const material = this.material;
         const shown = !material || this.onlyMaterial(sprite.userData.materials, material);
         sprite.visible = shown && (piece ? piece === selected && !!this.cricut :
-          !!selected && [glue.piece, glue.tab_piece].includes(selected));
+          !!selected && [glue.piece, glue.tab_piece].includes(selected)) &&
+          (!this.built || (piece ? [piece] : [glue.piece, glue.tab_piece]).every(p => this.built.has(p)));
       }
     }
   }
@@ -1022,8 +1042,27 @@ class FoldedView {
       object.geometry.setAttribute("position", new THREE.Float32BufferAttribute(
         pairs.flatMap(([a, b]) => [...V[a], ...V[b]]), 3));
       object.geometry.computeBoundingSphere();
-      object.visible = enabled && pairs.length > 0;
+      object.visible = enabled && pairs.length > 0 && !this.built;
     }
+  }
+  // Assembly player: show only the pieces glued so far (`placed`, a Set of piece ids); null shows all.
+  setBuilt(placed) {
+    const n = this.materialNames.length;
+    if (!this.hiddenMaterial) {
+      this.hiddenMaterial = new THREE.MeshBasicMaterial({visible: false});
+      this.meshMaterials[2 * n] = this.hiddenMaterial; this.innerMaterials[2 * n] = this.hiddenMaterial;
+    }
+    this.built = placed;
+    const groups = this.mesh.geometry.groups;
+    this.triFace.forEach((face, t) => {
+      const piece = this.model.faces[face].piece;
+      if (placed && !placed.has(piece)) groups[t].materialIndex = 2 * n;
+      else if (groups[t].materialIndex === 2 * n) groups[t].materialIndex = this.materialIndex.get(this.model.pieces[piece].material);
+    });
+    this.edges.visible = !placed && !this.material;
+    this.insideCuts.children.forEach(mesh => { mesh.visible = !placed && (!this.material || mesh.userData.material === this.material); });
+    this.updateDiagnosticLines();
+    this.updateLabelVisibility();
   }
   paint(piece, face) {
     this.selectedPiece = piece; this.selectedFace = face;
@@ -1041,6 +1080,7 @@ class FoldedView {
       let colour = this.model.isTab(f) ? white.clone() : this.base[f].clone();
       if (this.model.recut.has(this.model.faces[f].piece)) colour.lerp(recut, 0.7);
       if (f === face || relatedFaces.has(f)) colour = pick.clone();
+      else if (this.buildCurrent?.has(this.model.faces[f].piece)) colour.lerp(pick, 0.75);
       else if (piece && this.model.faces[f].piece === piece) colour.lerp(pick, 0.45);
       else if (this.relatedPieces?.includes(this.model.faces[f].piece)) colour.lerp(pick, 0.45);
       const pale = colour.clone().lerp(white, tintMix);
@@ -1056,6 +1096,7 @@ class FoldedView {
   visibleHit(ray) {
     return ray.intersectObjects([this.mesh, this.inner]).find(hit => {
       const material = this.model.pieces[this.model.faces[this.triFace[hit.faceIndex]].piece]?.material;
+      if (this.built && !this.built.has(this.model.faces[this.triFace[hit.faceIndex]].piece)) return false;
       return !this.currentMaterialFilter || material === this.currentMaterialFilter;
     });
   }
@@ -1085,7 +1126,8 @@ class FoldedView {
       group.materialIndex = this.materialIndex.get(this.model.pieces[this.model.faces[face].piece].material) + (dim.has(face) ? n : 0);
     });
     for (const list of [this.meshMaterials, this.innerMaterials])
-      list.forEach((entry, i) => { entry.visible = i >= n || !material || this.materialNames[i] === material; });
+      list.forEach((entry, i) => { if (i < 2 * n) entry.visible = i >= n || !material || this.materialNames[i] === material; });
+    if (this.built) this.setBuilt(this.built);
     // numbers, open glues and wrong folds only where every piece involved is the chosen cardstock
     this.material = material;
     this.numbers.children.forEach(sprite => {
@@ -1572,7 +1614,7 @@ class PatternView {
 }
 
 class Viewer {
-  constructor(model, svgText, exportText, labels, cricutRows, edgeRows = [], edgeChecksAvailable = true) {
+  constructor(model, svgText, exportText, labels, cricutRows, edgeRows = [], edgeChecksAvailable = true, assemblySteps = []) {
     this.model = model;
     this.edgeRows = edgeRows; this.edgeChecksAvailable = edgeChecksAvailable;
     this.cricutRows = cricutRows;
@@ -1718,6 +1760,7 @@ class Viewer {
     this.setupFind();
     this.setupInspection();
     this.setupLabels(exportText);
+    this.setupAssembly(assemblySteps);
   }
   // PDF numbers or Cricut labels, on the pattern and in 3D. Cricut labels need the export SVG.
   setupLabels(exportText) {
@@ -1730,10 +1773,11 @@ class Viewer {
     for (const text of doc.querySelectorAll("text[data-label]")) {
       const piece = text.closest("g[data-piece]")?.getAttribute("data-piece");
       if (text.hasAttribute("data-piece-number")) {
-        const frame = text.parentNode.querySelector(`path[data-piece-number="${CSS.escape(text.textContent)}"][data-mark="circle"], path[data-piece-number="${CSS.escape(text.textContent)}"][data-mark="square"]`);
+        const frame = text.parentNode.querySelector(["circle", "square", "triangle"].map(mark => `path[data-piece-number="${CSS.escape(text.textContent)}"][data-mark="${mark}"]`).join(", "));
         pieces.set(piece, {number: text.textContent, frame: frame?.getAttribute("data-mark") || ""});
       } else byEdge.set(`${piece}|${text.getAttribute("data-pdf-number")}`, text.getAttribute("data-label"));
     }
+    this.pieceNumbers = pieces;
     const labels = {pieces, glue: g => byEdge.get(`${g.piece}|${g.number}`) || byEdge.get(`${g.tab_piece}|${g.number}`) || String(g.number)};
     const apply = mode => {
       this.pattern.setLabels(mode === "cricut" ? doc : null);
@@ -1906,6 +1950,75 @@ class Viewer {
       document.getElementById("viewer-status").textContent = found;
     });
   }
+  // Assembly player (assembly.json from make assembly): the model grows step by step in glue order,
+  // the step's pieces blue. Play adds a piece every PLAY_MS; Next/Previous step by hand.
+  setupAssembly(steps) {
+    const open = document.getElementById("build-open"), bar = document.getElementById("build-bar");
+    const play = document.getElementById("build-play"), known = new Set(Object.keys(this.model.pieces));
+    this.buildSteps = (steps || []).map(step => ({...step, pieces: step.pieces.filter(p => known.has(p))})).filter(step => step.pieces.length);
+    if (!this.buildSteps.length) return;
+    open.hidden = false; this.buildAt = 0;
+    const stop = () => { clearInterval(this.buildTimer); this.buildTimer = null; play.textContent = "▶ Play"; play.setAttribute("aria-label", "Play"); };
+    this.stopBuild = stop;
+    const filter = document.getElementById("material-filter");
+    open.addEventListener("click", () => {
+      document.getElementById("pair-bar").hidden = true;
+      if (filter.value) { filter.value = ""; filter.dispatchEvent(new Event("change")); }
+      bar.hidden = false; this.folded.fitMirrorCenter(); this.showBuild(1);
+    });
+    const go = to => { stop(); this.showBuild(to); };
+    bar.querySelectorAll("[data-build]").forEach(b => b.addEventListener("click", () => {
+      const step = b.dataset.build;
+      go(step === "first" ? 1 : step === "last" ? this.buildSteps.length : this.buildAt + Number(step));
+    }));
+    const toggle = () => {
+      if (this.buildTimer) return stop();
+      if (this.buildAt >= this.buildSteps.length) this.showBuild(1);
+      play.textContent = "⏸ Pause"; play.setAttribute("aria-label", "Pause");
+      this.buildTimer = setInterval(() => {
+        if (this.buildAt >= this.buildSteps.length) stop(); else this.showBuild(this.buildAt + 1);
+      }, PLAY_MS);
+    };
+    play.addEventListener("click", toggle);
+    document.getElementById("build-close").addEventListener("click", () => {
+      stop(); bar.hidden = true; this.folded.setBuilt(null); this.folded.relatedPieces = []; this.folded.buildCurrent = null;
+      this.folded.paint(null, null); this.pattern.paint(null, null); this.folded.fitMirrorCenter();
+    });
+    document.addEventListener("keydown", e => {
+      if (bar.hidden || !this.editor.hidden || ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
+      if (e.key === " ") { e.preventDefault(); toggle(); return; }
+      const to = {n: 1, N: 1, PageDown: 1, b: -1, B: -1, PageUp: -1}[e.key];
+      if (to) { e.preventDefault(); go(this.buildAt + to); }
+      else if (e.key === "Home" || e.key === "End") { e.preventDefault(); go(e.key === "Home" ? 1 : this.buildSteps.length); }
+    });
+  }
+  // Cricut piece numbers of some pieces with their frames (○ left, □ right, △ no twin), twins as one
+  // entry (○□44); the piece ids without an export.
+  pieceNames(pieces) {
+    const names = new Map();
+    for (const piece of pieces) {
+      const entry = this.pieceNumbers?.get(piece), number = entry ? entry.number : piece.replace(/^piece-/, "");
+      names.set(number, (names.get(number) || "") + (entry ? {circle: "○", square: "□", triangle: "△"}[entry.frame] || "" : ""));
+    }
+    return [...names].map(([number, frames]) => [...frames].sort().reverse().join("") + number);
+  }
+  showBuild(at) {
+    const steps = this.buildSteps;
+    this.buildAt = Math.max(1, Math.min(steps.length, at));
+    const step = steps[this.buildAt - 1], [piece, ...twins] = step.pieces;
+    this.folded.setBuilt(new Set(steps.slice(0, this.buildAt).flatMap(s => s.pieces)));
+    this.folded.relatedPieces = twins; this.folded.buildCurrent = new Set(step.pieces);
+    this.folded.paint(piece, null); this.pattern.paint(piece, null);
+    this.folded.focusPiece(step.pieces); this.pattern.focus(piece);
+    const names = this.pieceNames(step.pieces).join(" ");
+    const onto = this.pieceNames(step.onto || []);
+    const how = step.starts_part ? "start a new part" : `glue onto ${onto.slice(0, 6).join(", ")}${onto.length > 6 ? " …" : ""}`
+      + (step.joins ? ` (joins ${step.joins + 1} parts)` : "");
+    const material = this.model.pieces[piece]?.material || step.material || "";
+    document.getElementById("build-label").innerHTML = "";
+    const bold = document.createElement("b"); bold.textContent = `Step ${this.buildAt} of ${steps.length}`;
+    document.getElementById("build-label").append(bold, ` · ${twins.length ? "pair" : "piece"} ${names} · ${material} · ${how}`);
+  }
   showPair(step) {
     this.pairAt = (this.pairAt + step + this.pairs.length) % this.pairs.length;
     const {pieces, trouble, unlike, judge} = this.pairs[this.pairAt], [piece, twin] = pieces;
@@ -2052,12 +2165,15 @@ function addHead(folded, head) {
 
 try {
   const labelsUrl = modelName ? `/api/labels?model=${encodeURIComponent(modelName)}` : "";
-  const [data, svgText, exportText, cricutRows, edgeChecks] = await Promise.all([
+  const [data, svgText, exportText, cricutRows, edgeChecks, assemblySteps] = await Promise.all([
     fetch(jsonUrl).then(r => { if (!r.ok) throw new Error(`${jsonUrl}: ${r.status}`); return r.json(); }),
     fetch(svgUrl).then(r => { if (!r.ok) throw new Error(`${svgUrl}: ${r.status}`); return r.text(); }),
     fetch(exportUrl).then(r => r.ok ? r.text() : "").catch(() => ""),  // optional: Cricut labels
     labelsUrl ? fetch(labelsUrl).then(r => r.ok ? r.json() : []).catch(() => []) : Promise.resolve([]),
     modelName ? fetch(`/api/edge-checks?model=${encodeURIComponent(modelName)}`).then(r=>r.ok?r.json():null).catch(()=>null) : Promise.resolve(null),
+    // The build order (make assembly) next to fold3d.json, for the Assemble player; optional.
+    fetch(sameOrigin(params.get("assembly") || jsonUrl.replace(/fold3d\.json($|\?)/, "assembly.json$1"), "assembly"))
+      .then(r => r.ok ? r.json() : null).then(a => a?.steps || []).catch(() => []),
   ]);
   // Without the review server (e.g. the Pages site), Find reads the Cricut labels from the export SVG.
   if (!cricutRows.length && exportText) {
@@ -2071,7 +2187,7 @@ try {
   }
   const model = new Model(data);
   const orientedExport = orientPieceIdentifiers(exportText, model);
-  window.viewer = new Viewer(model, svgText, orientedExport, readPrintLabels(svgText, cricutRows, model, orientedExport), cricutRows, edgeChecks || [], edgeChecks !== null);
+  window.viewer = new Viewer(model, svgText, orientedExport, readPrintLabels(svgText, cricutRows, model, orientedExport), cricutRows, edgeChecks || [], edgeChecks !== null, assemblySteps);
   window.addEventListener("message", event => {
     if (window.parent === window || event.origin !== location.origin || event.source !== window.parent ||
         event.data?.type !== "review-select-piece") return;
