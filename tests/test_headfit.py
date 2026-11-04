@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from src.lowpoly_pdf_to_svg.headfit import FoldedMask, HeadFitter, HeadModel, HeadSize, SightFinder
+from src.lowpoly_pdf_to_svg.headfit import FoldedMask, HeadFitter, HeadModel, HeadSize, SightFinder, TemplateWriter
 
 
 def helmet(radius: float = 150.0, rings: int = 14, segments: int = 24) -> dict:
@@ -52,6 +52,14 @@ class HeadFit(unittest.TestCase):
         sight = SightFinder(self.mask, 1.0).look(np.array([30.0, 0.0, 20.0]))
         self.assertEqual(sight["through"], "card")
         self.assertAlmostEqual(sight["distance_mm"], math.sqrt(150 ** 2 - 30 ** 2 - 20 ** 2), delta=5)
+
+    def test_drawings_credit_the_template_and_the_head(self):
+        head = HeadModel(HeadSize.from_fit({"head": "female"}))
+        writer = TemplateWriter(self.mask, helmet(), head, None, "Papercraft Cat & Co")
+        footer = writer._svg([])
+        self.assertIn("Mask: Papercraft Cat &amp; Co.", footer)
+        self.assertIn("MakeHuman", footer)
+        self.assertNotIn("Mask:", TemplateWriter(self.mask, helmet(), head, None)._svg([]))
 
 
 if __name__ == "__main__":
