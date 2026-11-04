@@ -116,8 +116,9 @@ glue area, is hard to press closed from inside, and breaks first; in our build t
 came apart at exactly these seams.
 
 **Narrow tabs.** The printed tabs are narrow and are drawn on one side of each seam. The builder
-used 15 mm double-sided tape cut into strips, which wants 7.5 mm tabs, and wider flaps where the
-load is high.
+uses 15 mm double-sided tape, the width she has readily available, and wants tabs that take it
+with a single lengthwise cut (7.5 mm), with full-width flaps where the load is high. A printed
+template cannot adapt its tabs to the builder's adhesive.
 
 **A fixed paper size.** The template is laid out on US Letter. European cardstock is A4, which is
 narrower and longer; pieces near the edge of a Letter page do not fit, and the pages cannot
@@ -199,8 +200,12 @@ against green), where a cut is needed anyway.
 
 ## Wider tabs and flaps
 
-Tabs are regenerated rather than traced: 7.5 mm along the whole glue edge (half of a 15 mm
-tape strip), and 15 mm wide tongues on seams that carry load or are short. A tab never crosses a
+Tabs are regenerated rather than traced, and their size is set per builder in the YAML file
+(`tabs: depth_mm`, `flap_mm`) to match the adhesive they have at hand. Our builder had 15 mm
+double-sided tape readily available, so the defaults follow it: tabs are 7.5 mm deep along the
+whole glue edge, so that a strip of tape cut once lengthwise covers two tabs, and 15 mm wide
+tongues, one full tape width, sit on seams that carry load or are short. On a mask this large,
+with this many parts, the wider glue area is what keeps the seams closed. A tab never crosses a
 fold of the face it glues onto; it is clipped there. Twins carry mirrored tabs, except where a
 piece glues to its own twin, where tabs alternate sides. Which side of a seam gets the tab is a
 free choice, and the nesting uses it.
