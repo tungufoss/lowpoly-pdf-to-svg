@@ -128,15 +128,18 @@ real head shape inside the folded model (`fold3d.json`): the MakeHuman base mesh
 neck up, `assets/head/makehuman-head.obj`, scaled to the head's circumference above the brows
 (`scripts/make-head-mesh.py` rebuilds it from MakeHuman). By default the wearer looks out through
 the model's eye openings (the largest mirrored pair in front), so the mask is turned to face where
-they face; for Bowser the snout then hangs down to the chest. The mask is then given the smallest
-scale at which the head fits with `clearance_mm` of air (0 by default: the mask rests on the head),
-with each pupil at least 5 mm inside its opening and the head tipped up to 30 degrees either way.
-If no such scale exists, the largest scale the eyes allow is used and the head room is reported.
-The head may leave through the neck opening (the largest). The folded model's inside is rough, so
-treat the head room as a guide. With `eyes: free` the mask is scaled until the head fits anywhere,
-and a ray straight ahead from each pupil finds the piece that needs a sight hole. It takes one to
-two minutes and does not change the pattern. Scaling the export itself is the next step (issue
-#79); until then, resize every sheet by the same percentage in Cricut Design Space.
+they face; for Bowser the snout then hangs down to the chest. The mask is scaled so the openings
+sit centred over the pupils (scale = pupil distance / opening spacing). The head stands upright
+with the pupils 10 to 20 mm behind the openings, and the mask rests on the shoulders: poses where
+the card cuts more than 5 mm into the shoulders or chest are left out. The head room is reported as
+a check only, because the folded model's inside is rough. With `eyes: free` the mask is instead
+scaled until the head, with `clearance_mm` of air, just fits, and a ray straight ahead from each
+pupil finds the piece that needs a sight hole. It takes about a minute and does not change the
+pattern. Scaling the export itself is the next step (issue #79); until then, resize every sheet by
+the same percentage in Cricut Design Space.
+
+The 3D viewer shows the fitted head inside the mask when `head-fit-mesh.json` is next to
+`fold3d.json`; the **head** switch hides it.
 
 ```yaml
 fit:
@@ -162,6 +165,7 @@ of them; the pupil distance only moves the pupil marks.
 | File | Contents |
 |---|---|
 | `head-fit.json` | Head used, `scale`, `eyes`, `eye_scale_range` (scales that keep each pupil 5 mm inside its opening), mask size at that scale, pupil position, `tip_deg`, `tightest_mm` (head room), and per eye: `through` (`card` or `opening`), the `piece`, distance ahead and the hole centre on the flat piece (`flat_mm`, pattern millimetres before scaling) |
+| `head-fit-mesh.json` | The fitted head and shoulders in the folded model's axes, for the 3D viewer |
 | `head-fit-views.svg` | A4: front and side of the scaled mask with the head and lines of sight |
 | `head-fit-eyes.svg` | A4 at 1:1 (print at 100 %): the eye openings at the fitted scale with the pupils, to hold to the face; with `eyes: free`, each piece the eyes look through with the sight hole to cut |
 
