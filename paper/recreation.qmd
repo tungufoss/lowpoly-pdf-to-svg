@@ -23,11 +23,14 @@ format:
         href: recreation.pdf
 abstract: |
   Low-poly papercraft masks are distributed by their designers, for sale or free for personal
-  use, as printable PDF templates. They are designed for
-  printing and cutting by hand, and they carry assumptions that become drawbacks once a builder
-  uses a cutting machine: edge numbers in a font too small to read (and to OCR), many small
-  pieces and short seams that are hard to glue and keep closed, narrow glue tabs, a fixed paper
-  size, a fixed colour per page, and no three-dimensional reference for where a piece goes. We
+  use, as printable PDF templates, designed for printing and cutting by hand. They share
+  drawbacks for any builder: edge numbers in a font too small to read, many small pieces and
+  short seams that are hard to glue and keep closed, narrow glue tabs, a fixed paper size, a
+  fixed colour per page, and no three-dimensional reference for where a piece goes. A cutting
+  machine would take the tedious cutting and scoring off the builder, but the template cannot
+  simply be fed to one: a print-then-cut feature, such as Cricut's Print Then Cut, cuts around
+  the printed image and does not know which lines are cuts and which are folds to score or
+  deboss. We
   describe an open-source pipeline that recreates such a template digitally, from the PDF the
   builder obtained from the designer, and then rebuilds it for fabrication. Edge numbers are read by OCR and
   corrected using the mirror symmetry of the mask; the pieces are folded into a 3D mesh that an
@@ -67,8 +70,12 @@ or give them away for personal use, as PDF templates: a set of printable pages w
 tabs and small numbers that tell the builder which edge glues to which. The format is made for a
 home printer, scissors and a scoring tool. Many builders now own a cutting machine (Cricut,
 Silhouette, Brother ScanNCut) that can cut, score and draw on cardstock, but the template is
-still a picture: the machine cannot use it until someone traces it, and the template's design
-choices, made for hand cutting, stay in place.
+still a picture. Print-then-cut features (Cricut's Print Then Cut, Silhouette's Print & Cut)
+print the page and cut around the printed image using registration marks; they do not know
+which lines are cut lines and which are fold lines to be scored or debossed, so everything would
+be cut. The machine cannot use the template until someone traces it into separate cut, score and
+draw lines. And the template's own drawbacks, which make the build hard by hand too, stay in
+place.
 
 This paper is a case study of that gap. The author downloaded a designer's template for a low-poly
 mask of Bowser, the villain of Nintendo's *Super Mario* games, and built it with a Cricut. The
