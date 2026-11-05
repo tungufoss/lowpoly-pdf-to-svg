@@ -89,10 +89,10 @@
   #three .hint { left: 122px; right: 8px; font-size: 11px; color: #4d4c48; background: #d4d8decc; }
   #pattern .hint { color: #6b6a66; background: #e8efffcc; }
   /* The issue colours, as a legend on the pattern; ✕ hides it, "legend" brings it back. */
-  #inspection-legend { position: absolute; top: 8px; right: 8px; z-index: 4; font-size: 12px; line-height: 1.5;
+  #inspection-legend { position: absolute; bottom: 8px; right: 8px; z-index: 4; font-size: 12px; line-height: 1.5;
     color: #1d1d1b; background: #ffffffe6; border: 1px solid #c9cfdb; border-radius: 6px; padding: 6px 26px 6px 10px; }
   #legend-hide { position: absolute; top: 2px; right: 2px; border: 0; background: none; cursor: pointer; font-size: 13px; color: #555; }
-  #legend-show { position: absolute; top: 8px; right: 8px; z-index: 4; font-size: 12px; }
+  #legend-show { position: absolute; bottom: 8px; right: 8px; z-index: 4; font-size: 12px; }
   /* After a find: just the pieces found, each cut from its page scan, side by side. */
   #found { position: absolute; inset: 0; z-index: 5; display: grid; grid-template-rows: auto 1fr;
     background: #e8efff; color: #1d1d1b; cursor: default; }
@@ -1289,6 +1289,10 @@ class FoldedView {
   const set = on => { legend.hidden = !on; show.hidden = on; try { localStorage.setItem("fold3d-legend", on ? "on" : "off"); } catch (e) {} };
   let on = true; try { on = localStorage.getItem("fold3d-legend") !== "off"; } catch (e) {}
   set(on);
+  // The pattern pane captures the pointer for panning, so its clicks never reach these buttons:
+  // keep pointer events on the legend to itself.
+  for (const node of [legend, show]) for (const type of ["pointerdown", "mousedown", "wheel"])
+    node.addEventListener(type, e => e.stopPropagation());
   document.getElementById("legend-hide").addEventListener("click", () => set(false));
   show.addEventListener("click", () => set(true));
 })();
