@@ -88,6 +88,11 @@
   #three { background: #d4d8de; }
   #three .hint { left: 122px; right: 8px; font-size: 11px; color: #4d4c48; background: #d4d8decc; }
   #pattern .hint { color: #6b6a66; background: #e8efffcc; }
+  /* The issue colours, as a legend on the pattern; ✕ hides it, "legend" brings it back. */
+  #inspection-legend { position: absolute; top: 8px; right: 8px; z-index: 4; font-size: 12px; line-height: 1.5;
+    color: #1d1d1b; background: #ffffffe6; border: 1px solid #c9cfdb; border-radius: 6px; padding: 6px 26px 6px 10px; }
+  #legend-hide { position: absolute; top: 2px; right: 2px; border: 0; background: none; cursor: pointer; font-size: 13px; color: #555; }
+  #legend-show { position: absolute; top: 8px; right: 8px; z-index: 4; font-size: 12px; }
   /* After a find: just the pieces found, each cut from its page scan, side by side. */
   #found { position: absolute; inset: 0; z-index: 5; display: grid; grid-template-rows: auto 1fr;
     background: #e8efff; color: #1d1d1b; cursor: default; }
@@ -116,11 +121,11 @@
     header .stats#stats { flex-basis: 100%; font-size: 12px; }
     header button, header select, header input[type="search"] { min-height: 32px; }
     #controls-toggle { display: inline-block; margin-left: auto; }
-    header:not(.expanded) > :not(h1, #stats, #fit-view, #build-open, #find, #controls-toggle) { display: none; }
+    header:not(.expanded) > :not(h1, #stats, #fit-view, #build-open, #find, #head-switch, #controls-toggle) { display: none; }
     #build-bar { padding: 6px 12px; gap: 6px; }
     #build-bar button { min-height: 40px; min-width: 44px; font-size: 16px; }
     #build-label { flex-basis: 100%; order: -1; font-size: 13px; }
-    header label, #inspection-legend { flex-basis: 100%; }
+    header label { flex-basis: 100%; }
     #inspection-list { max-width: 100% !important; width: 100%; }
     /* 16px keeps iOS Safari from zooming the page when the box takes focus. */
     #find-text { width: 8.5em; font-size: 16px; padding: 2px 6px; }
@@ -156,7 +161,6 @@
   <button id="pair-walk" type="button" title="Step through the mirror pairs, those needing the most work first">Mirror pairs</button>
   <label>Issues <select id="inspection-list" aria-label="Needs inspection" style="max-width:38em"><option value="">Choose an issue…</option></select></label>
   <label><input id="show-confirmed" type="checkbox">Show confirmed</label>
-  <span id="inspection-legend" style="font-size:0.85em"><span style="color:#ff8585">● Error: confirmed conflict</span> · <span style="color:#ffd166">● Needs checking: uncertain</span> · <span style="color:#8bdd9b">● Confirmed: accepted</span> · Blue marks show the affected geometry</span>
   <label>Cardstock <select id="material-filter" aria-label="Show cardstock material"><option value="">All materials</option></select></label>
   <label>3D numbers <select id="number-label-view" aria-label="3D number labels">
     <option value="glue">Inside markers (Labels switch)</option><option value="cricut">Cricut labels on the faces</option><option value="ocr">OCR numbers on the faces</option>
@@ -167,11 +171,11 @@
   <label class="tint-control">Cardstock tint <input type="range" id="cardstock-tint" min="0" max="100" value="55" aria-label="Cardstock tint intensity"><span id="cardstock-tint-value">55%</span></label>
   <span class="stats" id="viewer-status" aria-live="polite">Right-click a face to edit it or mark it as a tab.</span>
   <label title="PDF: the numbers read from the template. Cricut: the short labels and piece numbers the pen draws (from the export)">Labels
-    <select id="label-mode" aria-label="Which labels to show"><option value="pdf">PDF numbers</option><option value="cricut">Cricut labels</option></select></label>
+    <select id="label-mode" aria-label="Which labels to show"><option value="cricut" selected>Cricut labels</option><option value="pdf">PDF numbers</option></select></label>
   <label><input type="checkbox" id="show-scans" checked> page scans</label>
   <label><input type="checkbox" id="show-open" checked> <span class="open">open glues</span></label>
   <label><input type="checkbox" id="show-wrong" checked> <span class="wrong">folds bent the wrong way</span></label>
-  <label id="head-switch" hidden title="The head the mask is sized for (make headfit): MakeHuman base mesh, CC0"><input type="checkbox" id="show-head" checked> head</label>
+  <label id="head-switch" hidden title="Show or hide the person (head and shoulders) the mask is sized for (make headfit): MakeHuman base mesh, CC0"><input type="checkbox" id="show-head" checked> person</label>
 </header>
 <div id="pair-bar" role="toolbar" aria-label="Mirror pairs" hidden>
   <button type="button" data-step="-1" title="Previous pair (B)">◀ Back</button>
@@ -205,6 +209,10 @@
     <button type="button" data-collapse="pattern" title="Hide the pattern (3D model full width)">▶</button>
   </div>
   <div class="pane" id="pattern"><div class="hint">drag to pan · scroll to zoom · click a face</div>
+    <div id="inspection-legend" role="note"><button type="button" id="legend-hide" title="Hide the legend">✕</button>
+      <span style="color:#c62828">● Error: confirmed conflict</span><br><span style="color:#a06a00">● Needs checking: uncertain</span><br>
+      <span style="color:#2e7d32">● Confirmed: accepted</span><br><span style="color:#1f6feb">Blue marks:</span> the affected geometry</div>
+    <button type="button" id="legend-show" title="Show the legend" hidden>legend</button>
     <section id="found" aria-label="Pieces found" hidden>
       <div id="found-head"><span id="found-label"></span><button id="found-close" type="button">Show all pages</button></div>
       <div id="found-crops"></div>
@@ -1273,6 +1281,73 @@ class FoldedView {
   }
 }
 
+// The 2D panel lays the sheets out in a grid that fills the panel, in page order, whatever layout
+// the SVG has (the pattern groups pages by cardstock colour, one row per colour). Every coordinate of
+// a page's pieces and its page scan is moved by that page's shift; returns piece id -> [dx, dy].
+(() => {
+  const legend = document.getElementById("inspection-legend"), show = document.getElementById("legend-show");
+  const set = on => { legend.hidden = !on; show.hidden = on; try { localStorage.setItem("fold3d-legend", on ? "on" : "off"); } catch (e) {} };
+  let on = true; try { on = localStorage.getItem("fold3d-legend") !== "off"; } catch (e) {}
+  set(on);
+  document.getElementById("legend-hide").addEventListener("click", () => set(false));
+  show.addEventListener("click", () => set(true));
+})();
+const NUM_PAIR = /([-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?)\s*,\s*([-+]?(?:\d*\.)?\d+(?:e[-+]?\d+)?)/gi;
+function shiftCoords(root, dx, dy) {
+  if (!dx && !dy) return;
+  const fmt = v => String(Math.round(v * 1000) / 1000);
+  const nodes = [root, ...root.querySelectorAll("*")];
+  for (const n of nodes) {
+    for (const attr of ["d", "points"]) {
+      const v = n.getAttribute?.(attr);
+      if (v) n.setAttribute(attr, v.replace(NUM_PAIR, (_, x, y) => `${fmt(+x + dx)},${fmt(+y + dy)}`));
+    }
+    for (const [attr, d] of [["x", dx], ["y", dy], ["cx", dx], ["cy", dy], ["x1", dx], ["x2", dx], ["y1", dy], ["y2", dy]]) {
+      const v = n.getAttribute?.(attr);
+      if (v !== null && v !== undefined && v !== "" && Number.isFinite(+v)) n.setAttribute(attr, fmt(+v + d));
+    }
+    const t = n.getAttribute?.("transform");
+    if (t) n.setAttribute("transform", t.replace(/rotate\(\s*([-\d.e]+)[\s,]+([-\d.e]+)[\s,]+([-\d.e]+)\s*\)/gi,
+      (_, a, x, y) => `rotate(${a} ${fmt(+x + dx)} ${fmt(+y + dy)})`));
+  }
+}
+function regridPages(doc, aspect) {
+  const pages = [...doc.getElementsByTagName("inkscape:page")]
+    .map(p => ({id: (p.getAttribute("id") || "").replace(/^page-/, ""), node: p,
+      x: +p.getAttribute("x"), y: +p.getAttribute("y"), w: +p.getAttribute("width"), h: +p.getAttribute("height")}))
+    .filter(p => p.id && Number.isFinite(p.x) && Number.isFinite(p.y))
+    .sort((a, b) => a.id.localeCompare(b.id, undefined, {numeric: true}));
+  if (pages.length < 2) return new Map();
+  const w = Math.max(...pages.map(p => p.w)), h = Math.max(...pages.map(p => p.h)), gap = 20;
+  // the column count that shows the sheets largest in a panel of this width/height
+  let cols = 1, best = 0;
+  for (let c = 1; c <= pages.length; c++) {
+    const rows = Math.ceil(pages.length / c), W = c * (w + gap) - gap, H = rows * (h + gap) - gap;
+    const size = Math.min(aspect / W, 1 / H);
+    if (size > best) { best = size; cols = c; }
+  }
+  const shifts = new Map();
+  pages.forEach((p, i) => {
+    const nx = (i % cols) * (w + gap), ny = Math.floor(i / cols) * (h + gap);
+    const dx = nx - p.x, dy = ny - p.y;
+    p.node.setAttribute("x", nx.toFixed(3)); p.node.setAttribute("y", ny.toFixed(3));
+    shifts.set(p.id, [dx, dy]);
+  });
+  const byPiece = new Map();
+  for (const g of doc.querySelectorAll('g[id^="piece-"][data-material]')) {
+    const shift = shifts.get(g.id.split("-")[1]);
+    if (!shift) continue;
+    shiftCoords(g, ...shift); byPiece.set(g.id, shift);
+  }
+  for (const img of doc.querySelectorAll('image[id^="source-"]')) {
+    const shift = shifts.get(img.id.replace(/^source-/, ""));
+    if (shift) shiftCoords(img, ...shift);
+  }
+  const rows = Math.ceil(pages.length / cols);
+  doc.documentElement.setAttribute("viewBox", `0 0 ${cols * (w + gap) - gap} ${rows * (h + gap) - gap}`);
+  return byPiece;
+}
+
 class PatternView {
   constructor(el, model, svgText, onPick, onContextMenu) {
     this.el = el; this.model = model; this.onPick = onPick; this.onContextMenu = onContextMenu;
@@ -1282,6 +1357,8 @@ class PatternView {
     // the "page scans" switch; their file names are relative to the SVG (or served by the review server).
     doc.querySelectorAll("metadata").forEach(n => n.remove());
     doc.querySelectorAll("g").forEach(g => { if (g.getAttribute("inkscape:label") === "Review") g.remove(); });
+    const box = el.getBoundingClientRect();
+    this.shifts = regridPages(doc, box.width > 0 && box.height > 0 ? box.width / box.height : 1.5);
     const scanUrl = href => modelName && svgUrl.startsWith("/api/")
       ? `/api/preview?model=${encodeURIComponent(modelName)}&file=${encodeURIComponent(href.split("/").pop())}`
       : new URL(href, new URL(svgUrl, location.href)).href;
@@ -1401,6 +1478,7 @@ class PatternView {
         const source = exportDoc.querySelector(`g[id="${CSS.escape(group.id)}"] g[data-operation="draw"]`);
         if (source) {
           const copy = document.importNode(source, true);
+          shiftCoords(copy, ...(this.shifts.get(group.id) || [0, 0]));   // the export keeps the old page layout
           copy.removeAttribute("id"); copy.classList.add("cricut-labels");
           // the pattern's label colour, not the export's white-on-dark-card, so they read on the pale tint
           copy.setAttribute("style", draw.getAttribute("style") || "");
@@ -1800,7 +1878,8 @@ class Viewer {
       this.folded.setLabelMode(numberMode.value);
       try { localStorage.setItem(key, mode); } catch (e) {}
     };
-    try { select.value = localStorage.getItem(key) === "cricut" ? "cricut" : "pdf"; } catch (e) {}
+    select.value = "cricut";                     // Cricut labels unless this viewer chose PDF numbers before
+    try { if (localStorage.getItem(key) === "pdf") select.value = "pdf"; } catch (e) {}
     apply(select.value);
     select.addEventListener("change", () => apply(select.value));
   }
