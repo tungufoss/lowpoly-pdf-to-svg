@@ -227,21 +227,24 @@ answerable. A head model (MakeHuman base mesh, child, female or male, set in the
 wearer's body height sizing the shoulders and chest) stands upright inside the mask, facing out
 through the eye openings. The mask hangs the way it does when worn: Bowser's hair sits on the
 wearer's crown and the neck opening comes down to the torso, and those two contacts hold it.
-The head, from chin to crown, must be inside the card; the neck and shoulders may pass the rim,
-and the card may press at most 5 mm into the shoulders. At 100 %, the size that was built, the
-author's head (female, 175 cm) has about 4 mm of room and the mask rests on both the crown and
-the shoulders; letting it pitch forward or back does not let it hang lower. The
-pupils then sit about 50 mm behind and 25 mm below the centre of Bowser's eye openings: looking
-up about 10° reaches the lower edge of the openings, so the wearer can see out of them, but the
-openings are some way from the face and the wearer's own view includes the inside of the snout
-(@fig-headfit). This matches the build: the view out is limited but usable. The same rule gives
+The head, from chin to crown, must be inside the card; the neck and shoulders may pass the rim.
+Among the ways the mask can sit (pitched forward or back in 5° steps, the head further in or
+out), the fitter takes the one where the wearer, looking straight ahead, sees out through
+Bowser's eye openings rather than into the snout, pressing least into the shoulders. At 100 %,
+the size that was built, the author's head (female, 175 cm) sits well back in the mask with
+about 2 mm of room, the mask resting on both the crown and the shoulders, untilted: the pupils
+are about 75 mm behind and 15 mm below the centre of the eye openings, and the straight-ahead
+line of sight passes just over the snout and out through the openings (@fig-headfit). The neck
+rim then sits about 9 mm into the model's shoulder line, which the card and clothing take up.
+This matches the build: the openings are some way from the face and the wearer sees the top of
+the snout, but the view out is usable. The same rule gives
 the smallest size that still fits: 86 % for the author, 91 % for a man of 194 cm and 83 % for a
 child *(check)*. On Bowser, body height hardly changes these, because the crown meets the hair
 before the lower edge reaches the shoulders; at 100 % the 194 cm wearer's crown just touches the
 hair, as in @fig-worn. The pipeline also reports where each line of sight meets the card, in case
 a builder prefers small sight holes closer to the eyes.
 
-![Head fit for the author (female, 175 cm) with the mask at 100 %, as built: the mask hangs on the crown and the shoulders, the pupils are 50 mm behind and 25 mm below the eye openings, and looking up about 10° reaches them. Front and side views. Grey: cardstock; blue: head; red: pupils and straight-ahead line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
+![Head fit for the author (female, 175 cm) with the mask at 100 %, as built: the mask hangs on the crown and the shoulders, the pupils are 75 mm behind and 15 mm below the eye openings, and the straight-ahead line of sight leaves through them. Front and side views. Grey: cardstock; blue: head; red: pupils and straight-ahead line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
 
 
 ## Re-segmentation with darts

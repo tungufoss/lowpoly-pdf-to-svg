@@ -451,6 +451,7 @@ class FitResult:
     eye_scale: float | None = None     # scale at which the eye openings sit over the pupils
     eye_offset_mm: list | None = None  # pupils from the eye openings' centre: [behind, up] in mm
     look_up_deg: list | None = None    # gaze tilt up to see out: [to the opening's lower edge, to its centre]
+    shoulder_mm: float = 0.0           # neck rim this far into the body's shoulder line (card and clothes give)
     sight: list = field(default_factory=list)
 
 
@@ -460,6 +461,7 @@ class HeadFitter:
     def __init__(self, mask: FoldedMask, head: HeadModel, clearance: float, field: "ClearanceField | None" = None,
                  spacing: float = 8.0):
         self.mask, self.head, self.clearance = mask, head, clearance
+        self.shoulder_mm = 0.0       # how far the neck rim presses into the shoulder line
         self.field = field or ClearanceField(mask)
         self.samples = head.samples(spacing)
         self.upright = self.samples
@@ -578,10 +580,49 @@ class HeadFitter:
                         break
             return top
 
-        def hang(scale):
-            """The mask pitches (here: the head tips inside it) until it hangs lowest, which is where
-            it rests on the crown and on the shoulders together; ties go to the smaller tilt."""
+        def sight(scale, p, tip):
+            """Straight-ahead look-up to the eye openings (lower edge, centre), head tipped by `tip`."""
+            lower, centre = look_up_degrees(holes, scale, self.head.pupils @ _pitch(tip).T + p)
+            return lower - tip, centre - tip
+
+        def see(scale, tip):
+            """Where the head sits at this tilt so that, looking straight ahead, it sees out through
+            the eye openings (sight line under their upper half, above their lower edge) with the
+            whole head inside the card: the place pressing least into the shoulders, then the
+            roomiest. Returns (pupils, head room, look-up to the centre) and the shoulder press, mm."""
             best = None
+            for r in range(depth.start, depth.stop + 30, depth.step):
+                for dz in drop:
+                    p = mid * scale + np.array([0.0, r, dz])
+                    lower, centre = sight(scale, p, tip)
+                    if lower > 0:
+                        continue
+                    m = self.margin(scale, p, chin_up=True)
+                    if m < self.clearance:
+                        continue
+                    cut = max(self.torso_cut(scale, p, tip), 0.0)
+                    key = (round(cut), -m)
+                    if best is None or key < best[0]:
+                        best = (key, (p, m, centre), cut)
+            return None if best is None else best[1:]
+
+        def hang(scale):
+            """The mask pitches (here: the head tips inside it) until the wearer, looking straight
+            ahead, sees out through Bowser's eye openings rather than into the snout (Helga,
+            2026-11-05), the hair on the crown and the neck on the shoulders. The tilt that presses
+            least into the shoulders wins (the card flexes and clothes give a little); ties go to the
+            smaller tilt. If no tilt lets the eyes see out, the mask hangs lowest instead."""
+            best = None
+            for tip in sorted(tilts, key=abs):
+                self.samples = self.upright @ _pitch(tip).T
+                found = see(scale, tip)
+                if found is not None and (best is None or round(found[1]) < round(best[0][1])):
+                    best = (found, tip)
+            if best is not None:
+                (p, m, _), cut = best[0]
+                self.samples = self.upright
+                self.shoulder_mm = round(cut, 1)
+                return (p, m, 0), best[1]
             for tip in sorted(tilts, key=abs):
                 self.samples = self.upright @ _pitch(tip).T
                 top = rest(scale, tip)
@@ -671,7 +712,7 @@ class TemplateWriter:
         tri = upright(self.mask.triangles * s)
         head_offset = pupils
         panels = [("front", 0, "front: as seen by someone facing the wearer"), ("side", 1, "side: the wearer looks left")]
-        body = [f'<text x="12" y="14" font-size="5">Head fit: {r.head["name"]} head, mask at {s:.0%} '
+        body = [f'<text x="12" y="14" font-size="4.5">Head fit: {r.head["name"]} head, mask at {s:.0%} '
                 + (f'(head in, {r.tightest_mm:.0f} mm room, on {r.rests_on})</text>'
                  if r.rule == "inside" else
                  f'(head room check: {r.tightest_mm:.0f} mm, wanted {r.clearance_mm:g})</text>'),
@@ -679,13 +720,19 @@ class TemplateWriter:
                 f'{r.mask_size_mm[2]:.0f} mm (wide × deep × tall). Grey: card. Blue: head (MakeHuman, CC0). Red: pupils and sight.</text>']
         if r.eye_offset_mm:
             back, up = r.eye_offset_mm
-            look = (f' Looking up {r.look_up_deg[0]:.0f}° reaches the openings (centre {r.look_up_deg[1]:.0f}°).'
-                    if r.look_up_deg else "")
+            look = ("" if not r.look_up_deg else
+                    f' Looking straight ahead sees out (opening centre {r.look_up_deg[1]:.0f}° '
+                    f'{"up" if r.look_up_deg[1] >= 0 else "down"}).' if r.look_up_deg[0] <= 0 else
+                    f' Looking up {r.look_up_deg[0]:.0f}° reaches the openings (centre {r.look_up_deg[1]:.0f}°).')
+            more = []
             if r.tip_deg:
-                look += f' Mask tilted {abs(r.tip_deg):.0f}° {"forward" if r.tip_deg > 0 else "back"}.'
-
+                more.append(f'Mask tilted {abs(r.tip_deg):.0f}° {"forward" if r.tip_deg > 0 else "back"}.')
+            if r.shoulder_mm >= 1:
+                more.append(f'Neck rim {r.shoulder_mm:.0f} mm into the shoulder line (card and clothes give).')
             body.append(f'<text x="12" y="25" font-size="3.2">Pupils {back:.0f} mm behind and {abs(up):.0f} mm '
                         f'{"below" if up < 0 else "above"} the centre of the eye openings.{look}</text>')
+            if more:
+                body.append(f'<text x="12" y="29.5" font-size="3.2">{" ".join(more)}</text>')
         extent = tri.reshape(-1, 3)
         span = max(np.ptp(extent[:, 0]), np.ptp(extent[:, 1]), np.ptp(extent[:, 2]))
         zoom = min(180.0 / span, 125.0 / np.ptp(extent[:, 2]))
@@ -834,7 +881,7 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
         rule, rests_on, eye_scale, eye_offset, look_up = str(fit.get("rule", "inside")), "", None, None, None
         if holes and rule == "inside":
             eye_scale, *_, span, _ = fitter.fit_to_eyes(holes)
-            tilts = tuple(range(-20, 21, 5)) if fit.get("tilt", True) else (0.0,)
+            tilts = tuple(range(-10, 41, 5)) if fit.get("tilt", True) else (0.0,)
             scale, pupils, margin, rests_on, tip = fitter.fit_inside(holes, at=fit.get("scale") if k == 0 else None,
                                                                      tilts=tilts)
             head.tip(tip)
@@ -852,7 +899,7 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
                            pupils_mm=pupils.round(1).tolist(), tightest_mm=round(margin, 1),
                            mask_size_mm=size.round(0).tolist(), eyes="openings" if holes else "free",
                            eye_scale_range=[round(v, 3) for v in span] if span else None,
-                           tip_deg=tip, rule=rule if holes else "free", rests_on=rests_on,
+                           tip_deg=tip, rule=rule if holes else "free", rests_on=rests_on, shoulder_mm=fitter.shoulder_mm,
                            eye_scale=round(eye_scale, 3) if eye_scale else None, eye_offset_mm=eye_offset, look_up_deg=look_up)
         finder = SightFinder(mask, scale, finder_hole)
         result.sight = [finder.look(p + pupils) for p in head.pupils]
