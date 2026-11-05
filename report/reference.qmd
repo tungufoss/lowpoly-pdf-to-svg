@@ -141,7 +141,7 @@ meets first (`rests_on` in `head-fit.json`). The pupils may then sit below the e
 straight ahead from each pupil finds where to cut a sight hole. `rule: eyes` restores the older fit,
 which centres the openings over the pupils and only reports the head room (on Bowser the crown then
 comes through the top). With `eyes: free` the mask faces the `front` axis and is scaled until the
-head just fits. `eye_offset_mm` gives how far the pupils sit behind and above (+) or below (-) the eye openings. `height_cm` scales the shoulders and chest by body height against the preset's reference height (Swedish 18-year-olds, 180.4/167.6 cm; child: 8-year-olds, 130.5 cm; Albertsson Wikland et al. 2002), while the head keeps its own size. Bowser: female 86 % (crown meets the hair; pupils 40 mm behind, 35 mm below the openings), male 91 %, child 83 %. A run takes 10 to 15 minutes and does not change the
+head just fits. `look_up_deg` is how far the wearer must look up to see out of the eye openings (to their lower edge, to their centre). `eye_offset_mm` gives how far the pupils sit behind and above (+) or below (-) the eye openings. `height_cm` scales the shoulders and chest by body height against the preset's reference height (Swedish 18-year-olds, 180.4/167.6 cm; child: 8-year-olds, 130.5 cm; Albertsson Wikland et al. 2002), while the head keeps its own size. Bowser: female 86 % (crown meets the hair; pupils 40 mm behind, 35 mm below the openings), male 91 %, child 83 %. A run takes 10 to 15 minutes and does not change the
 pattern. Scaling the export itself is the next step (issue #79); until then, resize every sheet by
 the same percentage in Cricut Design Space.
 
@@ -153,6 +153,7 @@ fit:
   head: female            # child | female | male
   circumference_mm: 545   # optional: tape round the head above brow and ears; scales the preset
   eye_distance_mm: 61     # optional: pupil to pupil
+  scale: 1.0              # optional: hang the mask at this size instead of finding the smallest
   height_cm: 175          # optional: body height; sizes the shoulders and chest (default: Swedish mean for the preset)
   eyes: openings          # openings (default) or free
   rule: inside            # inside (default: whole head inside) or eyes (openings over the pupils)

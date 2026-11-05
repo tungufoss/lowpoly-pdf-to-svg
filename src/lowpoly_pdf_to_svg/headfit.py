@@ -450,6 +450,7 @@ class FitResult:
     rests_on: str = ""                 # "crown" or "shoulders" for the "inside" rule
     eye_scale: float | None = None     # scale at which the eye openings sit over the pupils
     eye_offset_mm: list | None = None  # pupils from the eye openings' centre: [behind, up] in mm
+    look_up_deg: list | None = None    # gaze tilt up to see out: [to the opening's lower edge, to its centre]
     sight: list = field(default_factory=list)
 
 
@@ -543,15 +544,19 @@ class HeadFitter:
         return scale, p, m, (lowest, highest), tip
 
     def fit_inside(self, holes: tuple[np.ndarray, np.ndarray], step: float = 0.02, high: float = 1.6,
-                   depth=range(-10, 61, 5), drop=range(40, -121, -5)) -> tuple[float, np.ndarray, float, str]:
+                   depth=range(-10, 61, 5), drop=range(40, -121, -5),
+                   at: float | None = None) -> tuple[float, np.ndarray, float, str]:
         """Smallest scale, from the eye scale up, at which the whole head stays inside the card
         (head room >= clearance, chin to crown: the neck may pass the rim, and the crown may go up
         into a hollow such as Bowser's hair) with the card at most TORSO_GIVE_MM into the shoulders. The mask
         rests as low as it can: on the crown or on the shoulders, whichever it meets first
-        (Helga, 2026-11-04). Returns scale, pupil midpoint, head room and what the mask rests on."""
+        (Helga, 2026-11-04). `at`: hang the mask at this scale instead of searching. Returns scale, pupil
+        midpoint, head room and what the mask rests on."""
         centres = np.array([h.mean(0) for h in holes])
         mid = np.array([0.0, centres[:, 1].mean(), centres[:, 2].mean()])
         scale = self.head.size.eye_distance / 2 / ((centres[1, 0] - centres[0, 0]) / 2)
+        if at is not None:
+            scale = high = float(at)
 
         def rest(scale):
             top = None
@@ -643,15 +648,17 @@ class TemplateWriter:
         head_offset = pupils
         panels = [("front", 0, "front: as seen by someone facing the wearer"), ("side", 1, "side: the wearer looks left")]
         body = [f'<text x="12" y="14" font-size="5">Head fit: {r.head["name"]} head, mask at {s:.0%} '
-                + (f'(head inside, {r.tightest_mm:.0f} mm room, rests on {r.rests_on})</text>'
+                + (f'(head in, {r.tightest_mm:.0f} mm room, on {r.rests_on})</text>'
                  if r.rule == "inside" else
                  f'(head room check: {r.tightest_mm:.0f} mm, wanted {r.clearance_mm:g})</text>'),
                 f'<text x="12" y="20" font-size="3.2">Mask {r.mask_size_mm[0]:.0f} × {r.mask_size_mm[1]:.0f} × '
                 f'{r.mask_size_mm[2]:.0f} mm (wide × deep × tall). Grey: card. Blue: head (MakeHuman, CC0). Red: pupils and sight.</text>']
         if r.eye_offset_mm:
             back, up = r.eye_offset_mm
+            look = (f' Looking up {r.look_up_deg[0]:.0f}° reaches the openings (centre {r.look_up_deg[1]:.0f}°).'
+                    if r.look_up_deg else "")
             body.append(f'<text x="12" y="25" font-size="3.2">Pupils {back:.0f} mm behind and {abs(up):.0f} mm '
-                        f'{"below" if up < 0 else "above"} the centre of the eye openings.</text>')
+                        f'{"below" if up < 0 else "above"} the centre of the eye openings.{look}</text>')
         extent = tri.reshape(-1, 3)
         span = max(np.ptp(extent[:, 0]), np.ptp(extent[:, 1]), np.ptp(extent[:, 2]))
         zoom = min(180.0 / span, 125.0 / np.ptp(extent[:, 2]))
@@ -797,12 +804,13 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
         holes = mask.eye_openings() if str(fit.get("eyes", "openings")) == "openings" else None
         span = None
         tip = 0.0
-        rule, rests_on, eye_scale, eye_offset = str(fit.get("rule", "inside")), "", None, None
+        rule, rests_on, eye_scale, eye_offset, look_up = str(fit.get("rule", "inside")), "", None, None, None
         if holes and rule == "inside":
             eye_scale, *_, span, _ = fitter.fit_to_eyes(holes)
-            scale, pupils, margin, rests_on = fitter.fit_inside(holes)
+            scale, pupils, margin, rests_on = fitter.fit_inside(holes, at=fit.get("scale") if k == 0 else None)
             opening = np.array([h.mean(0) for h in holes]).mean(0) * scale
             eye_offset = [round(float(pupils[1] - opening[1]), 1), round(float(pupils[2] - opening[2]), 1)]
+            look_up = look_up_degrees(holes, scale, head.pupils + pupils)
         elif holes:
             scale, pupils, margin, span, tip = fitter.fit_to_eyes(holes)
             head.tip(tip)
@@ -814,7 +822,7 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
                            mask_size_mm=size.round(0).tolist(), eyes="openings" if holes else "free",
                            eye_scale_range=[round(v, 3) for v in span] if span else None,
                            tip_deg=tip, rule=rule if holes else "free", rests_on=rests_on,
-                           eye_scale=round(eye_scale, 3) if eye_scale else None, eye_offset_mm=eye_offset)
+                           eye_scale=round(eye_scale, 3) if eye_scale else None, eye_offset_mm=eye_offset, look_up_deg=look_up)
         finder = SightFinder(mask, scale, finder_hole)
         result.sight = [finder.look(p + pupils) for p in head.pupils]
         results.append(result)
@@ -825,6 +833,20 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
             (folder / "head-fit-eyes.svg").write_text(writer.eyes(), encoding="utf-8")
             (folder / "head-fit-mesh.json").write_text(json.dumps(head_mesh(mask, head, result)), encoding="utf-8")
     return results
+
+
+def look_up_degrees(holes, scale: float, pupils: np.ndarray) -> list:
+    """How far each eye must look up (degrees, + up) to see out of its eye opening: to the opening's
+    lowest point and to its centre; the larger (worse) eye is reported."""
+    lower, centre = [], []
+    for pupil in pupils:
+        hole = min(holes, key=lambda h: abs(h.mean(0)[0] * scale - pupil[0])) * scale
+        def up(p):
+            ahead = max(pupil[1] - p[1], 1e-6)          # the face looks along -y
+            return math.degrees(math.atan2(p[2] - pupil[2], ahead))
+        lower.append(up(hole[np.argmin(hole[:, 2])]))
+        centre.append(up(hole.mean(0)))
+    return [round(max(lower), 1), round(max(centre), 1)]
 
 
 def head_mesh(mask: FoldedMask, head: HeadModel, result: FitResult) -> dict:
