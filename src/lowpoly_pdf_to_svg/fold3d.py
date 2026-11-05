@@ -2052,8 +2052,6 @@ class Reconstruction:
         x = np.c_[x[:, 0], -x[:, 2], x[:, 1]]
         light = np.array([0.4, -0.6, 0.7]) / np.linalg.norm([0.4, -0.6, 0.7])
         polys, colours = [], []
-        # matplotlib keeps z up and looks at the front from -y; the pose has y up and faces +z.
-        x = x[:, [0, 2, 1]] * [1.0, -1.0, 1.0]
         for pid, verts in self.asm.faces:
             p = x[verts]
             n = np.cross(p[1] - p[0], p[2] - p[0])
