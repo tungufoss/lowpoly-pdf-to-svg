@@ -23,11 +23,14 @@ format:
         href: recreation.pdf
 abstract: |
   Low-poly papercraft masks are distributed by their designers, for sale or free for personal
-  use, as printable PDF templates. They are designed for
-  printing and cutting by hand, and they carry assumptions that become drawbacks once a builder
-  uses a cutting machine: edge numbers in a font too small to read (and to OCR), many small
-  pieces and short seams that are hard to glue and keep closed, narrow glue tabs, a fixed paper
-  size, a fixed colour per page, and no three-dimensional reference for where a piece goes. We
+  use, as printable PDF templates, designed for printing and cutting by hand. They share
+  drawbacks for any builder: edge numbers in a font too small to read, many small pieces and
+  short seams that are hard to glue and keep closed, narrow glue tabs, a fixed paper size, a
+  fixed colour per page, and no three-dimensional reference for where a piece goes. A cutting
+  machine would take the tedious cutting and scoring off the builder, but the template cannot
+  simply be fed to one: a print-then-cut feature, such as Cricut's Print Then Cut, cuts around
+  the printed image and does not know which lines are cuts and which are folds to score or
+  deboss. We
   describe an open-source pipeline that recreates such a template digitally, from the PDF the
   builder obtained from the designer, and then rebuilds it for fabrication. Edge numbers are read by OCR and
   corrected using the mirror symmetry of the mask; the pieces are folded into a 3D mesh that an
@@ -67,8 +70,12 @@ or give them away for personal use, as PDF templates: a set of printable pages w
 tabs and small numbers that tell the builder which edge glues to which. The format is made for a
 home printer, scissors and a scoring tool. Many builders now own a cutting machine (Cricut,
 Silhouette, Brother ScanNCut) that can cut, score and draw on cardstock, but the template is
-still a picture: the machine cannot use it until someone traces it, and the template's design
-choices, made for hand cutting, stay in place.
+still a picture. Print-then-cut features (Cricut's Print Then Cut, Silhouette's Print & Cut)
+print the page and cut around the printed image using registration marks; they do not know
+which lines are cut lines and which are fold lines to be scored or debossed, so everything would
+be cut. The machine cannot use the template until someone traces it into separate cut, score and
+draw lines. And the template's own drawbacks, which make the build hard by hand too, stay in
+place.
 
 This paper is a case study of that gap. The author downloaded a designer's template for a low-poly
 mask of Bowser, the villain of Nintendo's *Super Mario* games, and built it with a Cricut. The
@@ -129,9 +136,9 @@ made clear they were an error in the template, they were removed in the piece ed
 removal is recorded, so later exports keep them out.
 
 **Many small pieces and short seams.** The template has 180 pieces on 21 sheets. Low-poly
-detail such as the nose, teeth, eyebrows and hair is split into small pieces with short edges:
+detail such as the bridge between the eyes, teeth, eyebrows and hair is split into small pieces with short edges:
 41 seams are shorter than 15 mm *(check: seam count from segment.py)*. A short seam has little
-glue area, is hard to press closed from inside, and breaks first; in our build the green nose
+glue area, is hard to press closed from inside, and breaks first; in our build the green bridge between the eyes
 came apart at exactly these seams. It was held together with clear tape, the kind used for
 wrapping presents, which works but is not ideal: it shows, and taping across the scored folds of
 small pieces is fiddly.
@@ -215,19 +222,29 @@ numbers and the new short labels (@fig-viewer).
 
 ## Fitting the mask to a head
 
-How large should the mask be? The folded mesh makes the size a choice. A head model (MakeHuman
-base mesh, child, female or male, set in the YAML) stands upright inside the mask with its face
-behind the eye openings, and the rule is simple: the whole head must be inside the card. The
-pipeline finds the smallest scale at which it is, letting the mask rest as low as it can, on the
-crown of the head or on the shoulders, whichever it meets first (the card may press at most 5 mm
-into the shoulders). For Bowser this gives 102 % (female), 109 % (male) and 93 % (child) *(check)*,
-so the template's printed size is about right, which is consistent with the full-size mask worn by a man
-of about 1.95 m (@fig-worn). Placing the eye openings exactly over the pupils would need about
-74 % for a female head, but the crown would then come up through the top of the mask. At the
-fitted size the pupils sit below Bowser's eye openings, so the pipeline also reports where each
-line of sight meets the card, which is where a small sight hole is cut (@fig-headfit).
+How large should the mask be, and how does it hang? The folded mesh makes both questions
+answerable. A head model (MakeHuman base mesh, child, female or male, set in the YAML, with the
+wearer's body height sizing the shoulders and chest) stands upright inside the mask, facing out
+through the eye openings. The mask hangs the way it does when worn: Bowser's hair sits on the
+wearer's crown and the neck opening comes down to the torso, and those two contacts hold it.
+The head, from chin to crown, must be inside the card; the neck and shoulders may pass the rim.
+Among the ways the mask can sit (pitched forward or back in 5° steps, the head further in or
+out), the fitter takes the one where the wearer, looking straight ahead, sees out through
+Bowser's eye openings rather than into the snout, pressing least into the shoulders. At 100 %,
+the size that was built, the author's head (female, 175 cm) sits well back in the mask with
+about 2 mm of room, the mask resting on both the crown and the shoulders, untilted: the pupils
+are about 75 mm behind and 15 mm below the centre of the eye openings, and the straight-ahead
+line of sight passes just over the snout and out through the openings (@fig-headfit). The neck
+rim then sits about 9 mm into the model's shoulder line, which the card and clothing take up.
+This matches the build: the openings are some way from the face and the wearer sees the top of
+the snout, but the view out is usable. The same rule gives
+the smallest size that still fits: 86 % for the author, 91 % for a man of 194 cm and 83 % for a
+child *(check)*. On Bowser, body height hardly changes these, because the crown meets the hair
+before the lower edge reaches the shoulders; at 100 % the 194 cm wearer's crown just touches the
+hair, as in @fig-worn. The pipeline also reports where each line of sight meets the card, in case
+a builder prefers small sight holes closer to the eyes.
 
-![Head fit for a female head: the mask at 102 %, the smallest size with the whole head inside; the mask rests on the crown. Front and side views. Grey: cardstock; blue: head; red: pupils and line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
+![Head fit for the author (female, 175 cm) with the mask at 100 %, as built: the mask hangs on the crown and the shoulders, the pupils are 75 mm behind and 15 mm below the eye openings, and the straight-ahead line of sight leaves through them. Front and side views. Grey: cardstock; blue: head; red: pupils and straight-ahead line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
 
 
 ## Re-segmentation with darts
@@ -244,7 +261,7 @@ papercraft [@mitani2004], but with fabrication terms (seam length, sheet fit) in
 
 | Model part | Pieces (PDF) | Pieces (recut) | Seams < 15 mm (PDF) | Seams < 15 mm (recut) |
 |:--|--:|--:|--:|--:|
-| Green (nose, snout) | 26 | 16 | 11 | 2 |
+| Green (bridge between the eyes) | 26 | 16 | 11 | 2 |
 | Whole mask | 180 | 113 | 41 | 16 |
 
 : Re-segmentation of the Bowser mask *(check; regenerate from segment/evolve summaries)*. {#tbl-resegment}

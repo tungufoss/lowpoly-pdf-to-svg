@@ -39,6 +39,12 @@ class HeadFit(unittest.TestCase):
         with self.assertRaises(ValueError):
             HeadSize.from_fit({"head": "giant"})
 
+    def test_body_height_sizes_the_shoulders_not_the_head(self):
+        base = HeadModel(HeadSize.from_fit({"head": "female"}))
+        tall = HeadModel(HeadSize.from_fit({"head": "female", "height_cm": 190}))
+        self.assertGreater(np.ptp(tall.torso_triangles[..., 0]), np.ptp(base.torso_triangles[..., 0]) * 1.1)
+        self.assertAlmostEqual(np.ptp(tall.triangles[..., 2]), np.ptp(base.triangles[..., 2]), delta=1.0)
+
     def test_a_smaller_head_needs_a_smaller_mask(self):
         scales = {}
         for name in ("child", "male"):
