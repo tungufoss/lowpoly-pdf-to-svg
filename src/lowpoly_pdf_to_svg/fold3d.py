@@ -1785,10 +1785,10 @@ class Reconstruction:
         self.log(self.plan.summary())
         self._csv(out / "fold3d-glue.csv", rows, ["number", "piece", "tab_piece", "length_mm", "length_diff_mm",
                                                   "gap_mm", "look_alike", "status", "stage"])
-        self._preview(out / "fold3d.png", x)
         review = self._review(rows)
         self._csv(out / "fold3d-review.csv", review, ["order", "material", "piece", "twin", "what", "detail"])
         self._viewer_json(out / "fold3d.json", x, rows, review)
+        self._preview(out / "fold3d.png", x, self._wearer_frame(out / "fold3d.json"))
         moves, inspect = CornerAdjuster(self).rows()
         moves = CornerAdjuster.carry(out / "fold3d-moves.csv", moves)
         self._csv(out / "fold3d-moves.csv", moves,
@@ -2042,25 +2042,33 @@ class Reconstruction:
             lines += ["f " + " ".join(str(v + 1) for v in verts) for verts in faces]
         path.write_text("\n".join(lines) + "\n")
 
-    def _preview(self, path: Path, x: np.ndarray) -> None:
+    def _preview(self, path: Path, x: np.ndarray, frame: np.ndarray | None = None) -> None:
+        """Front, side and top views. `frame` (rows: wearer's right, back, up; see headfit) turns the
+        front and side views to the wearer's own, as in the head-fit drawing; top stays on the pose."""
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-        # x is already posed (x right, y up, z towards the viewer); the camera looks along +y with z up
-        x = np.c_[x[:, 0], -x[:, 2], x[:, 1]]
+        # x is already posed (x right, y up, z towards the viewer); matplotlib looks along +y with z up
+        posed = np.c_[x[:, 0], -x[:, 2], x[:, 1]]
+        wearer = x @ frame.T if frame is not None else posed       # right, back, up
         light = np.array([0.4, -0.6, 0.7]) / np.linalg.norm([0.4, -0.6, 0.7])
-        polys, colours = [], []
-        for pid, verts in self.asm.faces:
-            p = x[verts]
-            n = np.cross(p[1] - p[0], p[2] - p[0])
-            shade = 0.45 + 0.55 * abs(float(n @ light)) / (np.linalg.norm(n) + 1e-9)
-            polys.append(p)
-            colours.append(tuple(c * shade for c in MATERIAL_RGB.get(self.asm.pieces[pid].material, (0.7, 0.7, 0.7))))
+
+        def faces(v):
+            polys, colours = [], []
+            for pid, verts in self.asm.faces:
+                p = v[verts]
+                n = np.cross(p[1] - p[0], p[2] - p[0])
+                shade = 0.45 + 0.55 * abs(float(n @ light)) / (np.linalg.norm(n) + 1e-9)
+                polys.append(p)
+                colours.append(tuple(c * shade for c in MATERIAL_RGB.get(self.asm.pieces[pid].material, (0.7, 0.7, 0.7))))
+            return polys, colours
         fig = plt.figure(figsize=(15, 5.4))
-        m = np.abs(x).max()
-        for i, (elev, azim, title) in enumerate([(10, -90, "front"), (10, 0, "side"), (80, -90, "top")]):
+        m = np.abs(posed).max()
+        views = [(wearer, 0, -90, "front"), (wearer, 0, 0, "side: looking left"), (posed, 80, -90, "top")]
+        for i, (v, elev, azim, title) in enumerate(views):
+            polys, colours = faces(v)
             ax = fig.add_subplot(1, 3, i + 1, projection="3d")
             ax.add_collection3d(Poly3DCollection(polys, facecolors=colours, edgecolors=(0, 0, 0, 0.25), linewidths=0.2))
             ax.set_xlim(-m, m), ax.set_ylim(-m, m), ax.set_zlim(-m, m)
@@ -2070,6 +2078,20 @@ class Reconstruction:
         fig.tight_layout()
         fig.savefig(path, dpi=110)
         plt.close(fig)
+
+    @staticmethod
+    def _wearer_frame(viewer_json: Path) -> np.ndarray | None:
+        """The wearer's frame from the eye openings (headfit.FoldedMask); None if there are none."""
+        try:
+            from .headfit import FoldedMask, _pitch
+            frame = FoldedMask(json.loads(viewer_json.read_text(encoding="utf-8")), np.array([0.0, 1.0, 0.0])).frame
+        except Exception:                  # no eye openings, or scipy missing: keep the pose
+            return None
+        fit = viewer_json.with_name("head-fit.json")    # an earlier head fit: show the mask as it hangs
+        if fit.exists():
+            tip = float(json.loads(fit.read_text(encoding="utf-8")).get("tip_deg", 0.0))
+            frame = _pitch(tip).T @ frame
+        return frame
 
 
 def _look_alike(number: str) -> str:

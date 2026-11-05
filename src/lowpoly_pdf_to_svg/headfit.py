@@ -462,6 +462,7 @@ class HeadFitter:
         self.mask, self.head, self.clearance = mask, head, clearance
         self.field = field or ClearanceField(mask)
         self.samples = head.samples(spacing)
+        self.upright = self.samples
 
     def torso_cut(self, scale: float, pupils: np.ndarray, tip: float) -> float:
         """Deepest the card goes into the shoulders and chest, mm."""
@@ -473,7 +474,8 @@ class HeadFitter:
     def margin(self, scale: float, pupils: np.ndarray, chin_up: bool = False) -> float:
         """Least air between head and card in real mm, ignoring head that has left through the neck.
         `chin_up`: only the head from the chin up; the neck and shoulders may pass the card's rim."""
-        samples = self.samples[self.samples[:, 2] >= CHIN_BELOW_PUPILS * self.head.size.height] if chin_up else self.samples
+        upright = getattr(self, "upright", self.samples)
+        samples = self.samples[upright[:, 2] >= CHIN_BELOW_PUPILS * self.head.size.height] if chin_up else self.samples
         points = (samples + pupils) / scale
         keep = ~self.mask.beyond_neck(points, (self.head.core_centre + pupils) / scale)
         return float((scale * self.field(points[keep])).min()) if keep.any() else -1e3
@@ -545,40 +547,59 @@ class HeadFitter:
 
     def fit_inside(self, holes: tuple[np.ndarray, np.ndarray], step: float = 0.02, high: float = 1.6,
                    depth=range(-10, 61, 5), drop=range(40, -121, -5),
-                   at: float | None = None) -> tuple[float, np.ndarray, float, str]:
+                   at: float | None = None, tilts=(0.0,)) -> tuple[float, np.ndarray, float, str, float]:
         """Smallest scale, from the eye scale up, at which the whole head stays inside the card
         (head room >= clearance, chin to crown: the neck may pass the rim, and the crown may go up
         into a hollow such as Bowser's hair) with the card at most TORSO_GIVE_MM into the shoulders. The mask
         rests as low as it can: on the crown or on the shoulders, whichever it meets first
-        (Helga, 2026-11-04). `at`: hang the mask at this scale instead of searching. Returns scale, pupil
-        midpoint, head room and what the mask rests on."""
+        (Helga, 2026-11-04). `at`: hang the mask at this scale instead of searching. `tilts`: mask pitch
+        angles to try (degrees); it hangs at the one where it sits lowest, resting on crown and
+        shoulders (Helga, 2026-11-05). Returns scale, pupil midpoint, head room, what the mask rests
+        on and the head's tip inside the mask (the mask's tilt, seen from the upright head, is minus that)."""
         centres = np.array([h.mean(0) for h in holes])
         mid = np.array([0.0, centres[:, 1].mean(), centres[:, 2].mean()])
         scale = self.head.size.eye_distance / 2 / ((centres[1, 0] - centres[0, 0]) / 2)
         if at is not None:
             scale = high = float(at)
 
-        def rest(scale):
+        def rest(scale, tip):
+            """Lowest the mask hangs at this tilt: the head as high in it as card and shoulders allow."""
             top = None
             for r in depth:                      # face this far behind the eye openings
                 for dz in drop:                  # head this far above (+) or below the openings
                     if top is not None and dz <= top[2]:
                         break
                     p = mid * scale + np.array([0.0, r, dz])
-                    if self.torso_cut(scale, p, 0) > TORSO_GIVE_MM:
+                    if self.torso_cut(scale, p, tip) > TORSO_GIVE_MM:
                         continue
                     m = self.margin(scale, p, chin_up=True)
                     if m >= self.clearance:
                         top = (p, m, dz)
                         break
             return top
+
+        def hang(scale):
+            """The mask pitches (here: the head tips inside it) until it hangs lowest, which is where
+            it rests on the crown and on the shoulders together; ties go to the smaller tilt."""
+            best = None
+            for tip in sorted(tilts, key=abs):
+                self.samples = self.upright @ _pitch(tip).T
+                top = rest(scale, tip)
+                if top is not None and (best is None or top[2] > best[0][2] + 1e-9):
+                    best = (top, tip)
+            self.samples = self.upright
+            return best
         while scale <= high:
-            top = rest(scale)
-            if top is not None:
-                p, m, _ = top
+            found = hang(scale)
+            if found is not None:
+                (p, m, _), tip = found
+                self.samples = self.upright @ _pitch(tip).T
                 up = p + np.array([0.0, 0.0, 5.0])
-                on = "shoulders" if self.torso_cut(scale, up, 0) > TORSO_GIVE_MM else "crown"
-                return scale, p, m, on
+                shoulders = self.torso_cut(scale, up, tip) > TORSO_GIVE_MM
+                crown = self.margin(scale, up, chin_up=True) < self.clearance
+                self.samples = self.upright
+                on = "crown and shoulders" if shoulders and crown else "shoulders" if shoulders else "crown"
+                return scale, p, m, on, tip
             scale += step
         raise RuntimeError(f"the head does not fit inside even at {high:.0%}")
 
@@ -643,8 +664,11 @@ class TemplateWriter:
 
     def views(self) -> str:
         r, s = self.result, self.result.scale
-        tri = self.mask.triangles * s
         pupils = np.array(r.pupils_mm)
+        # Drawn from the upright wearer: turn the scene back by the head's tip, so the mask shows tilted.
+        turn = _pitch(r.tip_deg)
+        upright = (lambda v: (v - pupils) @ turn + pupils) if r.tip_deg else (lambda v: v)
+        tri = upright(self.mask.triangles * s)
         head_offset = pupils
         panels = [("front", 0, "front: as seen by someone facing the wearer"), ("side", 1, "side: the wearer looks left")]
         body = [f'<text x="12" y="14" font-size="5">Head fit: {r.head["name"]} head, mask at {s:.0%} '
@@ -657,6 +681,9 @@ class TemplateWriter:
             back, up = r.eye_offset_mm
             look = (f' Looking up {r.look_up_deg[0]:.0f}° reaches the openings (centre {r.look_up_deg[1]:.0f}°).'
                     if r.look_up_deg else "")
+            if r.tip_deg:
+                look += f' Mask tilted {abs(r.tip_deg):.0f}° {"forward" if r.tip_deg > 0 else "back"}.'
+
             body.append(f'<text x="12" y="25" font-size="3.2">Pupils {back:.0f} mm behind and {abs(up):.0f} mm '
                         f'{"below" if up < 0 else "above"} the centre of the eye openings.{look}</text>')
         extent = tri.reshape(-1, 3)
@@ -676,14 +703,14 @@ class TemplateWriter:
                 x, y = xy(tri[i])
                 body.append('<path d="M' + " L".join(f"{a:.1f},{b:.1f}" for a, b in zip(x, y)) + 'Z"/>')
             body.append("</g>")
-            chest = self.head.torso_triangles + head_offset
+            chest = upright(self.head.torso_triangles + head_offset)
             body.append('<g fill="#7a9cc6" stroke="#7a9cc6" stroke-width="0.2" opacity="0.18">')
             for tri_ in chest:
                 x, y = xy(tri_)
                 if np.all(np.abs(x - cx) < 100) and np.all(np.abs(y - cy) < 66):
                     body.append('<path d="M' + " L".join(f"{a:.1f},{b:.1f}" for a, b in zip(x, y)) + 'Z"/>')
             body.append("</g>")
-            skin = self.head.triangles + head_offset
+            skin = upright(self.head.triangles + head_offset)
             order = np.argsort(skin[:, :, depth].mean(1) * (1 if name == "front" else -1))
             body.append('<g fill="#1f5fa8" stroke="#1f5fa8" stroke-width="0.2" opacity="0.3">')
             for i in order:
@@ -807,10 +834,14 @@ def fit_model(config: Path, head_name: str | None = None, compare: bool = False)
         rule, rests_on, eye_scale, eye_offset, look_up = str(fit.get("rule", "inside")), "", None, None, None
         if holes and rule == "inside":
             eye_scale, *_, span, _ = fitter.fit_to_eyes(holes)
-            scale, pupils, margin, rests_on = fitter.fit_inside(holes, at=fit.get("scale") if k == 0 else None)
+            tilts = tuple(range(-20, 21, 5)) if fit.get("tilt", True) else (0.0,)
+            scale, pupils, margin, rests_on, tip = fitter.fit_inside(holes, at=fit.get("scale") if k == 0 else None,
+                                                                     tilts=tilts)
+            head.tip(tip)
             opening = np.array([h.mean(0) for h in holes]).mean(0) * scale
             eye_offset = [round(float(pupils[1] - opening[1]), 1), round(float(pupils[2] - opening[2]), 1)]
-            look_up = look_up_degrees(holes, scale, head.pupils + pupils)
+            look_up = look_up_degrees(holes, scale, head.pupils @ _pitch(tip).T + pupils)
+            look_up = [round(v - tip, 1) for v in look_up]       # the face already points up by `tip`
         elif holes:
             scale, pupils, margin, span, tip = fitter.fit_to_eyes(holes)
             head.tip(tip)

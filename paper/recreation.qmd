@@ -229,7 +229,8 @@ through the eye openings. The mask hangs the way it does when worn: Bowser's hai
 wearer's crown and the neck opening comes down to the torso, and those two contacts hold it.
 The head, from chin to crown, must be inside the card; the neck and shoulders may pass the rim,
 and the card may press at most 5 mm into the shoulders. At 100 %, the size that was built, the
-author's head (female, 175 cm) has about 4 mm of room and the mask rests on the shoulders. The
+author's head (female, 175 cm) has about 4 mm of room and the mask rests on both the crown and
+the shoulders; letting it pitch forward or back does not let it hang lower. The
 pupils then sit about 50 mm behind and 25 mm below the centre of Bowser's eye openings: looking
 up about 10° reaches the lower edge of the openings, so the wearer can see out of them, but the
 openings are some way from the face and the wearer's own view includes the inside of the snout
@@ -240,7 +241,7 @@ before the lower edge reaches the shoulders; at 100 % the 194 cm wearer's crown 
 hair, as in @fig-worn. The pipeline also reports where each line of sight meets the card, in case
 a builder prefers small sight holes closer to the eyes.
 
-![Head fit for the author (female, 175 cm) with the mask at 100 %, as built: the mask hangs from the crown and the shoulders, the pupils are 50 mm behind and 25 mm below the eye openings, and looking up about 10° reaches them. Front and side views. Grey: cardstock; blue: head; red: pupils and straight-ahead line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
+![Head fit for the author (female, 175 cm) with the mask at 100 %, as built: the mask hangs on the crown and the shoulders, the pupils are 50 mm behind and 25 mm below the eye openings, and looking up about 10° reaches them. Front and side views. Grey: cardstock; blue: head; red: pupils and straight-ahead line of sight. Mask: Papercraft Cat, © 2017 Remy Del Toro. Head and torso: MakeHuman base mesh, Data Collection AB and the MakeHuman team (CC0).](figures/head-fit.jpg){#fig-headfit width=70%}
 
 
 ## Re-segmentation with darts
