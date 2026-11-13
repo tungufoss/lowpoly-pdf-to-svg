@@ -3,12 +3,11 @@
 Draft of a 4-page short paper on the PDF-to-SVG conversion (deadline 22 Jan 2027, 23:59 UTC).
 Build with `make eg2027` from the repository root.
 
-- `main.tex`: preamble. Uses the official `egpubl.cls` when it is in this folder, otherwise a
-  stand-in layout (A4, two columns, 9 pt Times). The official short-paper package is only
-  available from the EG SRM system; copy its `.cls`, `.sty` and `.bst` files here and align the
-  official branch of the preamble with the package's own template file.
+- `main.tex`: preamble copied from the official `EGauthorGuidelines-short.tex` (EG 2027 style
+  kit, files in `egkit/`, found through `latexmkrc`). Current build: exactly 4 pages including
+  references.
 - `authors.tex`: `\anonymoustrue` for the double-blind submission, `\anonymousfalse` for the
-  camera-ready version. `\codelink` prints the repository only when de-anonymised.
+  camera-ready version. The anonymous author line reads `Paper ID xxx`: put the SRM paper ID there. `\codelink` prints the repository only when de-anonymised.
 - `abstract.tex`, `body.tex`: text. `\notesfalse` hides draft notes.
 - `eg2027.bib`: references (check each against the publisher before submission).
 
