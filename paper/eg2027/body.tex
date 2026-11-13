@@ -306,8 +306,18 @@ Shapes are good without help: the unsupervised cut outlines lie a median 0.60\,m
 checked ones, 90\,\% within 1.4\,mm, and only 3 of 178 pieces are more than 3\,mm off. Mirror
 averaging alone made 262 corner moves and added 10 folds. The numbers are the bottleneck: the
 unsupervised run pairs 1059 of 1575 numbers with the right partner, 10 with a wrong one, and
-leaves 496 open, most of them tab-versus-edge confusions and misreads. The open questions are what
-keeps the fold-up from closing (3 parts instead of 1).
+leaves 496 open, most of them tab-versus-edge confusions and misreads.
+
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.9\columnwidth]{figures/mask.png}
+\caption{The reconstructed mask: our pieces, folded at their score lines and glued at their
+recovered numbers (front, three-quarter and side view, cardstock colours from the model YAML).
+All 754 glued edges close. The same fold-up drives an interactive viewer that links each 3D face
+to its flat piece.}
+\label{fig:mask}
+\end{figure}
 
 \begin{table}[t]
 \centering\footnotesize
@@ -335,7 +345,7 @@ human input (rows)            & 0    & 1079 \\
 \end{table}
 
 With all answers, 1548 of 1569 numbers pair cleanly and every one of the 754 glued edges closes
-in the fold-up, with a median gap of 0.1\,mm. Of the 21 numbers left open, 6 are numbered edges
+in the fold-up, with a median gap of 0.1\,mm (Figure~\ref{fig:mask}). Of the 21 numbers left open, 6 are numbered edges
 around an eye opening that glue to nothing; the others are length mismatches and extra copies
 that do not keep the fold-up from closing. Of the 670 number
 answers only 14 changed the reading of the day, but they were not redundant: a reader trained
