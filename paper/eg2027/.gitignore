@@ -7,3 +7,6 @@
 *.out
 *.synctex.gz
 main.pdf
+*.brf
+*.lbl
+build.log
