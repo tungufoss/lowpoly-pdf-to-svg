@@ -1,0 +1,13 @@
+% Author block. Double-blind review: keep \anonymoustrue for submission.
+% Set \anonymousfalse for the camera-ready version (and arXiv/website copies).
+\newif\ifanonymous \anonymoustrue
+
+\ifanonymous
+  \author[Anonymous]{Anonymous submission ID~xxx}
+\else
+  \author[H.~TODO]{Helga TODO\\University of Iceland}
+\fi
+
+% Self-references: in the anonymous version cite the software in the third person and give
+% no link. \codelink prints the repository only in the de-anonymised version.
+\newcommand{\codelink}{\ifanonymous (link withheld for review)\else \url{https://github.com/tungufoss/lowpoly-pdf-to-svg}\fi}

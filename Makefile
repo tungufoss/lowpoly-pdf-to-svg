@@ -140,3 +140,9 @@ bench-report:
 .PHONY: paper
 paper:
 	cd paper && LC_ALL=C.UTF-8 quarto render   # from paper/ so font-paths: fonts resolves
+
+# Eurographics 2027 short paper (issue #97): LaTeX in paper/eg2027/, double-blind by default.
+#   make eg2027     build paper/eg2027/main.pdf (official egpubl.cls if present there, else a stand-in layout)
+.PHONY: eg2027
+eg2027:
+	cd paper/eg2027 && latexmk -pdf -interaction=nonstopmode -halt-on-error main.tex

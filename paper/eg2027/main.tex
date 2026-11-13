@@ -1,0 +1,84 @@
+% Eurographics 2027 short paper: PDF-to-SVG conversion of low-poly papercraft templates.
+% Issue #97. Build: `make eg2027` from the repo root (or latexmk -pdf main.tex here).
+%
+% Template: the EG short-paper LaTeX package is only downloadable from the SRM system
+% (https://srmv2.eg.org/COMFy/Conference/EG_2027S). When egpubl.cls is present in this folder
+% the official class is used; otherwise a stand-in layout (A4, two columns, 9 pt Times) keeps
+% the page count close. Replace the official branch's preamble lines with the ones in the
+% package's own EGauthorGuidelines .tex file once it is here.
+\IfFileExists{egpubl.cls}{\def\egofficial{}}{}
+
+\ifdefined\egofficial
+  \documentclass{egpubl}
+  \IfFileExists{eg2027.sty}{\usepackage{eg2027}}{}
+  \ShortPresentation          % short paper track (check against the package's template)
+  \electronicVersion
+  \PrintedOrElectronic
+  \usepackage{egweblnk}
+\else
+  \documentclass[a4paper,twocolumn,9pt]{extarticle}
+  \usepackage[a4paper,textwidth=17.4cm,textheight=24.6cm,columnsep=0.8cm,top=2.4cm]{geometry}
+  \usepackage{mathptmx}
+  \usepackage[T1]{fontenc}
+  \usepackage{titlesec}
+  \titleformat{\section}{\normalfont\bfseries\large}{\thesection.}{0.5em}{}
+  \titleformat{\subsection}{\normalfont\bfseries}{\thesubsection.}{0.5em}{}
+  \titlespacing*{\section}{0pt}{1.6ex}{0.8ex}
+  \titlespacing*{\subsection}{0pt}{1.2ex}{0.5ex}
+  \newcommand{\teaser}[1]{\def\egteaser{#1}}
+  \newcommand{\ccsdesc}[2][100]{}
+  \newcommand{\printccsdesc}{}
+  \newenvironment{CCSXML}{\comment}{\endcomment}
+  \usepackage{comment}
+  \let\egorigauthor\author \renewcommand{\author}[2][]{\egorigauthor{#2}}
+  \let\egorigtitle\title  \renewcommand{\title}[2][]{\egorigtitle{#2}}
+  \date{}
+\fi
+
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage[noend]{algpseudocode}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+
+% Pseudocode in the small size EG uses for floats.
+\makeatletter
+\renewcommand{\ALG@beginalgorithmic}{\footnotesize}
+\makeatother
+\algrenewcommand\algorithmicrequire{\textbf{Input:}}
+\algrenewcommand\algorithmicensure{\textbf{Output:}}
+\newcommand{\Comm}[1]{\hfill{\color{gray}$\triangleright$ #1}}
+
+% Draft notes for the author; \notesfalse removes them for submission.
+\newif\ifnotes \notestrue
+\newcommand{\todo}[1]{\ifnotes{\color{orange!80!black}[#1]}\fi}
+
+\input{authors}
+
+\title[Self-checking vectorization of papercraft templates]%
+      {Reading a Papercraft Template: Self-Checking Vectorization\\of Low-Poly PDF Patterns for Cutting Machines}
+
+\begin{document}
+\ifdefined\egofficial\else
+  \makeatletter
+  \twocolumn[\begin{@twocolumnfalse}
+    \maketitle
+    \begin{abstract}\input{abstract}\end{abstract}
+    \vspace{2ex}
+  \end{@twocolumnfalse}]
+  \makeatother
+\fi
+\ifdefined\egofficial
+  \begin{abstract}\input{abstract}\end{abstract}
+  \maketitle
+\fi
+
+\input{body}
+
+\bibliographystyle{\ifdefined\egofficial eg-alpha-doi\else alpha\fi}
+{\footnotesize\bibliography{eg2027}}
+\end{document}

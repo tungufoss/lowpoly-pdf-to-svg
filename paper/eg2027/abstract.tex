@@ -1,0 +1,16 @@
+Low-poly papercraft models are shared as printable PDF templates: flat pieces with solid cut
+lines, dashed fold lines, glue tabs and small edge numbers that say which edges are glued
+together. A cutting machine needs vector paths instead, split into cut, score and draw
+operations. Generic raster-to-vector tools reproduce the picture but not its meaning: a
+dashed fold becomes many short cuts, and a misread edge number goes unnoticed. We present a
+pipeline that reads such a template as a fabrication plan. It separates the printed ink into
+pieces, folds and numbers, fits each piece as a polygon, reads the numbers with two
+independent readers, and then checks its own result with constraints the template carries
+for free: every number is printed exactly twice on edges of equal length, one of which is a
+tab; most pieces have a mirror twin; and the pieces must fold up into a closed surface. The
+constraints settle uncertain readings, repair traced geometry and decide which few questions
+are left for a person. On one 21-sheet mask template with 178 pieces and 1569 edge numbers,
+the unsupervised run pairs 67\,\% of the numbers with the right partner and traces outlines
+to a median of 0.6\,mm; with the remaining questions answered, all 754 glued edges close in a
+3D fold-up with a median gap of 0.1\,mm. The output is one layered SVG file per model,
+editable in Inkscape and ready for a cutting machine.
