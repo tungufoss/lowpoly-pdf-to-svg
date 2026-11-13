@@ -62,14 +62,31 @@ class FoldedMesh:
         ax.set_axis_off()
 
 
-def main(obj: str, out: str, views=((10, 180), (18, 145), (8, 90))):
+def main(obj: str, out: str, views=((10, 0), (18, 35), (8, 90)), gap: int = 30):
+    """One render per view, each cropped to the model, packed side by side with a small gap.
+    View (10, 0) looks at the face (the mesh faces +z, y up)."""
+    from PIL import Image, ImageChops
+    import io
     mesh = FoldedMesh(Path(obj))
-    fig = plt.figure(figsize=(7.0, 2.6))
-    for k, (elev, azim) in enumerate(views):
-        ax = fig.add_subplot(1, len(views), k + 1, projection="3d")
+    tiles = []
+    for elev, azim in views:
+        fig = plt.figure(figsize=(4, 4))
+        ax = fig.add_subplot(projection="3d")
         mesh.draw(ax, elev, azim)
-    fig.subplots_adjust(0, 0, 1, 1, wspace=-0.15)
-    fig.savefig(out, dpi=300, bbox_inches="tight", pad_inches=0.02)
+        fig.subplots_adjust(0, 0, 1, 1)
+        buf = io.BytesIO()
+        fig.savefig(buf, dpi=300)
+        plt.close(fig)
+        tile = Image.open(buf).convert("RGB")
+        box = ImageChops.difference(tile, Image.new("RGB", tile.size, "white")).getbbox()
+        tiles.append(tile.crop(box))
+    height = max(t.height for t in tiles)
+    sheet = Image.new("RGB", (sum(t.width for t in tiles) + gap * (len(tiles) - 1), height), "white")
+    x = 0
+    for t in tiles:
+        sheet.paste(t, (x, height - t.height))
+        x += t.width + gap
+    sheet.save(out)
 
 
 if __name__ == "__main__":
