@@ -1,0 +1,63 @@
+% Eurographics 2027 short paper: PDF-to-SVG conversion of low-poly papercraft templates.
+% Issue #97. Build: `make eg2027` from the repo root.
+% Preamble follows the official EGauthorGuidelines-short.tex (EG 2027 style kit, in egkit/).
+% !! Do not change the class lines below; they come from the kit.
+\documentclass{egpubl}
+\usepackage{eg2027}
+\ShortPresentation
+
+\usepackage[T1]{fontenc}
+\usepackage{dfadobe}
+\usepackage{cite}
+\BibtexOrBiblatex
+\electronicVersion
+\PrintedOrElectronic
+\ifpdf \usepackage[pdftex]{graphicx} \pdfcompresslevel=9
+\else \usepackage[dvips]{graphicx} \fi
+\usepackage{egweblnk}
+% end of kit prologue
+
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage[noend]{algpseudocode}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
+\usepackage{xcolor}
+\usepackage{xurl}  % break long URLs in the references
+
+% Pseudocode in the small size used for floats.
+\makeatletter
+\renewcommand{\ALG@beginalgorithmic}{\footnotesize}
+\makeatother
+\algrenewcommand\algorithmicrequire{\textbf{Input:}}
+\algrenewcommand\algorithmicensure{\textbf{Output:}}
+\newcommand{\Comm}[1]{\hfill{\color{gray}$\triangleright$ #1}}
+
+% Draft notes for the author; \notesfalse removes them for submission.
+\newif\ifnotes \notestrue
+\newcommand{\todo}[1]{\ifnotes{\color{orange!80!black}[#1]}\fi}
+
+\input{authors}
+% PDF metadata: no author while anonymous (the anonymity rule covers metadata too).
+\hypersetup{pdftitle={Reading a Papercraft Template: Self-Checking Vectorization of Low-Poly PDF Patterns for Cutting Machines},
+  pdfauthor={\ifanonymous\else Helga TODO\fi}, pdfcreator={}, pdfkeywords={}}
+
+\title[Self-Checking Vectorization of Papercraft Templates]%
+      {Reading a Papercraft Template: Self-Checking Vectorization\\of Low-Poly PDF Patterns for Cutting Machines}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+\input{abstract}
+% ACM CCS 2012. TODO before submission: add the CCSXML block from https://dl.acm.org/ccs
+\ccsdesc[500]{Computing methodologies~Image processing}
+\ccsdesc[300]{Applied computing~Computer-aided manufacturing}
+\printccsdesc
+\end{abstract}
+
+\input{body}
+
+\bibliographystyle{eg-alpha-doi}
+\bibliography{eg2027}
+\end{document}

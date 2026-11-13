@@ -1,0 +1,4 @@
+# Find the EG style kit in egkit/.
+ensure_path('TEXINPUTS', './egkit//');
+ensure_path('BSTINPUTS', './egkit//');
+$pdf_mode = 1;
